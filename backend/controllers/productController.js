@@ -1,4 +1,4 @@
-const  sql  = require("../db");
+const sql = require("../db");
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
@@ -24,39 +24,43 @@ exports.getDelayReasons = async (req, res) => {
   }
 };
 
+// Fetch from Users table where role = 'operator'
 exports.getEmployees = async (req, res) => {
   try {
-    const result = await sql.query("SELECT id, name FROM Employee");
+    const result = await sql.query`SELECT id, username as name FROM Users WHERE role = 'operator' ORDER BY username`;
     res.json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch employees" });
   }
 };
 
+// Fetch from Users table where role = 'operator'
 exports.getIncharges = async (req, res) => {
   try {
-    const result = await sql.query("SELECT id, name FROM Incharge");
+    const result = await sql.query`SELECT id, username as name FROM Users WHERE role = 'operator' ORDER BY username`;
     res.json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch incharges" });
   }
 };
 
-exports.getSupervisors = async (req, res) => {
-  try {
-    const result = await sql.query`SELECT id, supervisorName FROM Supervisors ORDER BY supervisorName`;
-    res.status(200).json(result.recordset);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch supervisors" });
-  }
-};
-
+// Fetch from Users table where role = 'operator'
 exports.getOperators = async (req, res) => {
   try {
-    const result = await sql.query`SELECT id, operatorName FROM Operators ORDER BY operatorName`;
+    const result = await sql.query`SELECT id, username as operatorName FROM Users WHERE role = 'operator' ORDER BY username`;
     res.status(200).json(result.recordset);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch operators" });
+  }
+};
+
+// Fetch from Users table where role = 'supervisor'
+exports.getSupervisors = async (req, res) => {
+  try {
+    const result = await sql.query`SELECT id, username as supervisorName FROM Users WHERE role = 'supervisor' ORDER BY username`;
+    res.status(200).json(result.recordset);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch supervisors" });
   }
 };
 
@@ -305,11 +309,9 @@ exports.downloadAllReports = async (req, res) => {
       return false;
     };
 
-    // ⬇️ MODIFIED: Centered and "Darkly" hyphen logic added ⬇️
     const drawCellText = (text, x, y, w, h, align = 'center', font = 'Helvetica', fontSize = 9) => {
       const content = (text !== null && text !== undefined && text !== "") ? text.toString() : "-";
       
-      // If it is a hyphen, force center alignment and bold (dark) font
       const finalAlign = (content === "-") ? 'center' : align;
       const finalFont = (content === "-") ? 'Helvetica-Bold' : font;
 
@@ -333,13 +335,10 @@ exports.downloadAllReports = async (req, res) => {
       let currentY = 30;
       doc.rect(startX, currentY, tableWidth, 60).stroke();
       
-      // ⬇️ NEW: Add the Logo Image to the left cell if it exists
       const logoPath = path.join(__dirname, '../assets/logo.png');
       if (fs.existsSync(logoPath)) {
-        // Fits the logo nicely in the 120x40px area
         doc.image(logoPath, startX + 5, currentY + 10, { fit: [120, 40], align: 'center', valign: 'center' });
       } else {
-        // Fallback text if logo is missing
         doc.font('Helvetica-Bold').fontSize(16).text("SAKTHI AUTO", startX + 10, currentY + 22, { width: 120, align: 'center' });
       }
 
@@ -416,7 +415,6 @@ exports.downloadAllReports = async (req, res) => {
             currentY += maxH;
           });
 
-          // Draw Total Row if requested
           if (totalConfig) {
             let totals = {};
             totalConfig.sumCols.forEach(k => totals[k] = 0);
