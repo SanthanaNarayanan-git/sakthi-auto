@@ -5,18 +5,21 @@ const PDFDocument = require("pdfkit");
 const path = require("path");
 
 /**
- * GET incharges for the searchable dropdown
+ * GET supervisors (replacing incharges) for the searchable dropdown
  */
 router.get("/incharges", async (req, res) => {
   try {
+    // Fetch from the Users table where role is 'supervisor'
+    // Aliasing 'username' to 'name' so the frontend dropdown doesn't break
     const result = await sql.query`
-      SELECT name 
-      FROM Incharge 
-      ORDER BY name ASC
+      SELECT username AS name 
+      FROM dbo.Users 
+      WHERE role = 'supervisor'
+      ORDER BY username ASC
     `;
     res.json(result.recordset);
   } catch (err) {
-    console.error("Error fetching incharges:", err);
+    console.error("Error fetching supervisors:", err);
     res.status(500).json({ message: "DB error" });
   }
 });
@@ -80,7 +83,7 @@ router.get("/report", async (req, res) => {
     const topRecord = result.recordset.length > 0 ? result.recordset[0] : {};
     const headerLine = topRecord.line || "DISA - I";
     
-    // UPDATED: Get all unique part names from the database and join them with commas
+    // Get all unique part names from the database and join them with commas
     const uniquePartNames = [...new Set(
       result.recordset
         .map(row => row.partName)
@@ -98,7 +101,7 @@ router.get("/report", async (req, res) => {
     const headers = [
       "Date /\nShift", "M/c.\nNo", "Type of\n4M", "Description", 
       "First\nPart", "Last\nPart", "Insp.\nFreq", "Retro\nChecking", 
-      "Quarantine", "Part\nIdent.", "Internal\nComm.", "Incharge\nSign"
+      "Quarantine", "Part\nIdent.", "Internal\nComm.", "Supervisor\nSign" // Changed Header text slightly
     ];
 
     // Helper: Draw Vector Tick, Cross, or standard Text
@@ -178,7 +181,7 @@ router.get("/report", async (req, res) => {
       const rowData = [
         dateShiftString, row.mcNo, row.type4M, row.description,
         row.firstPart, row.lastPart, row.inspFreq, row.retroChecking,
-        row.quarantine, row.partId, row.internalComm, row.inchargeSign
+        row.quarantine, row.partId, row.internalComm, row.inchargeSign // the DB column is still called inchargeSign
       ];
 
       let x = startX;

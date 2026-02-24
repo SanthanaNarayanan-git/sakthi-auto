@@ -1,11 +1,23 @@
-const  sql  = require('../db');
+const sql = require('../db');
 
 exports.getDetails = async (req, res) => {
   try {
     const { date, disa } = req.query;
 
-    const operatorsRes = await sql.query`SELECT OperatorName FROM dbo.Operators`;
-    const supervisorsRes = await sql.query`SELECT supervisorName FROM dbo.Supervisors`;
+    // Fetch operators and supervisors from the Users table based on their role
+    const operatorsRes = await sql.query`
+      SELECT username AS OperatorName 
+      FROM dbo.Users 
+      WHERE role = 'operator' 
+      ORDER BY username
+    `;
+    
+    const supervisorsRes = await sql.query`
+      SELECT username AS supervisorName 
+      FROM dbo.Users 
+      WHERE role = 'supervisor' 
+      ORDER BY username
+    `;
 
     const recordsRes = await sql.query`
       SELECT * FROM DmmSettingParameters 

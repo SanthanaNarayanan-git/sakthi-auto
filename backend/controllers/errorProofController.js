@@ -1,4 +1,4 @@
-const  sql  = require('../db');
+const sql = require('../db');
 
 exports.getDetails = async (req, res) => {
   try {
@@ -16,9 +16,19 @@ exports.getDetails = async (req, res) => {
       ORDER BY rp.SNo ASC
     `;
 
+    // Fetch HOFs and Operators for the dropdowns
+    const hofsRes = await sql.query`
+      SELECT username AS name FROM dbo.Users WHERE role = 'hof' ORDER BY username
+    `;
+    const operatorsRes = await sql.query`
+      SELECT username AS name FROM dbo.Users WHERE role = 'operator' ORDER BY username
+    `;
+
     res.json({
       verifications: mainRes.recordset,
-      reactionPlans: reactionRes.recordset
+      reactionPlans: reactionRes.recordset,
+      hofs: hofsRes.recordset,
+      operators: operatorsRes.recordset
     });
 
   } catch (err) {
