@@ -24,7 +24,7 @@ const Hof = () => {
   const [isErrorPdfMaximized, setIsErrorPdfMaximized] = useState(false);
   const errorSigCanvas = useRef({});
 
-  // 🔥 NEW States for Error Proof Verification 2 (3-Shift Version)
+  // States for Error Proof Verification 2 (V2)
   const [errorReportsV2, setErrorReportsV2] = useState([]);
   const [selectedErrorReportV2, setSelectedErrorReportV2] = useState(null);
   const [errorPdfUrlV2, setErrorPdfUrlV2] = useState(null);
@@ -32,20 +32,31 @@ const Hof = () => {
   const [isErrorPdfMaximizedV2, setIsErrorPdfMaximizedV2] = useState(false);
   const errorSigCanvasV2 = useRef({});
 
+  // 🔥 NEW: States for Daily Production Performance
+  const [dailyReports, setDailyReports] = useState([]);
+  const [selectedDailyReport, setSelectedDailyReport] = useState(null);
+  const [dailyPdfUrl, setDailyPdfUrl] = useState(null);
+  const [isDailyPdfLoading, setIsDailyPdfLoading] = useState(false);
+  const [isDailyPdfMaximized, setIsDailyPdfMaximized] = useState(false);
+  const dailySigCanvas = useRef({});
+
   const storedUser = JSON.parse(localStorage.getItem("user") || "{}");
   const currentHOF = storedUser.username || "hof_user";
 
   const API_BASE = 'http://localhost:5000/api/bottom-level-audit';
   const ERR_API_BASE = 'http://localhost:5000/api/error-proof';
-  const ERR_API_BASE_V2 = 'http://localhost:5000/api/error-proof2'; // 🔥 NEW API BASE FOR V2
+  const ERR_API_BASE_V2 = 'http://localhost:5000/api/error-proof2'; 
+  const DAILY_API_BASE = 'http://localhost:5000/api/daily-performance'; // 🔥 NEW API BASE
 
   useEffect(() => {
     fetchReports();
     fetchErrorReports();
-    fetchErrorReportsV2(); // 🔥 Fetch V2 Reports
+    fetchErrorReportsV2(); 
+    fetchDailyReports(); // 🔥 Fetch Daily Reports
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // --- EXISTING FETCH FUNCTIONS ---
   const fetchReports = async () => {
     try {
       const res = await axios.get(`${API_BASE}/hof/${currentHOF}`);
@@ -53,18 +64,67 @@ const Hof = () => {
     } catch (err) { toast.error("Failed to load Bottom Level reports."); }
   };
 
-  const handleOpenSignModal = async (report) => {
+  const fetchErrorReports = async () => {
+    try {
+      const res = await axios.get(`${ERR_API_BASE}/hof/${currentHOF}`);
+      setErrorReports(res.data);
+    } catch (err) { toast.error("Failed to load Error Proof reports."); }
+  };
+
+  const fetchErrorReportsV2 = async () => {
+    try {
+      const res = await axios.get(`${ERR_API_BASE_V2}/hof/${currentHOF}`);
+      setErrorReportsV2(res.data);
+    } catch (err) { toast.error("Failed to load Error Proof V2 reports."); }
+  };
+
+  // ===============================================
+  //  🔥 NEW: DAILY PRODUCTION PERFORMANCE LOGIC
+  // ===============================================
+  const fetchDailyReports = async () => {
+    try {
+      const res = await axios.get(`${DAILY_API_BASE}/hof/${currentHOF}`);
+      setDailyReports(res.data);
+    } catch (err) { toast.error("Failed to load Daily Performance reports."); }
+  };
+
+  const handleOpenDailyModal = async (report) => {
+    setSelectedDailyReport(report); setDailyPdfUrl(null); setIsDailyPdfLoading(true); setIsDailyPdfMaximized(false); 
+    try {
+      const dateStr = new Date(report.productionDate).toISOString().split('T')[0];
+      const response = await axios.get(`${DAILY_API_BASE}/download-pdf`, { 
+        params: { date: dateStr, disa: report.disa }, 
+        responseType: 'blob' 
+      });
+      const pdfBlobUrl = URL.createObjectURL(response.data);
+      setDailyPdfUrl(pdfBlobUrl);
+    } catch (error) { toast.error("Failed to load Daily Performance PDF."); }
+    setIsDailyPdfLoading(false);
+  };
+
+  const submitDailySignature = async () => {
+    if (dailySigCanvas.current.isEmpty()) { toast.warning("Please provide a signature first."); return; }
+    const signatureData = dailySigCanvas.current.getCanvas().toDataURL("image/png");
+
+    try {
+      await axios.post(`${DAILY_API_BASE}/sign-hof`, { reportId: selectedDailyReport.id, signature: signatureData });
+      toast.success("Daily Performance Report signed!");
+      setSelectedDailyReport(null); fetchDailyReports(); 
+    } catch (err) { toast.error("Failed to save Daily Performance signature."); }
+  };
+
+
+  // --- EXISTING MODAL LOGIC (Bottom Level, Error V1, Error V2) ---
+  const handleOpenSignModal = async (report) => { /* ...existing logic... */ 
     setSelectedReport(report); setPdfUrl(null); setIsPdfLoading(true); setIsPdfMaximized(false); 
     try {
       const month = report.month; const year = report.year; const disaMachine = report.disa;
       const monthlyRes = await axios.get(`${API_BASE}/monthly-report`, { params: { month, year, disaMachine } });
-
       const monthlyLogs = monthlyRes.data.monthlyLogs || [];
       const ncReports = monthlyRes.data.ncReports || [];
       const todayStr = new Date().toISOString().split('T')[0];
       const detailsRes = await axios.get(`${API_BASE}/details`, { params: { date: todayStr, disaMachine } });
       const checklist = detailsRes.data.checklist;
-
       const historyMap = {}; const holidayDays = new Set(); const vatDays = new Set();
       const supSigMap = {}; const hofSig = report.hofSignature;
 
@@ -148,16 +208,6 @@ const Hof = () => {
     } catch (err) { toast.error("Failed to save signature."); }
   };
 
-  // ===============================================
-  //  ERROR PROOF VERIFICATION LOGIC (V1 - Untouched)
-  // ===============================================
-  const fetchErrorReports = async () => {
-    try {
-      const res = await axios.get(`${ERR_API_BASE}/hof/${currentHOF}`);
-      setErrorReports(res.data);
-    } catch (err) { toast.error("Failed to load Error Proof reports."); }
-  };
-
   const handleOpenErrorModal = async (report) => {
     setSelectedErrorReport(report); setErrorPdfUrl(null); setIsErrorPdfLoading(true); setIsErrorPdfMaximized(false); 
     try {
@@ -180,16 +230,6 @@ const Hof = () => {
     } catch (err) { toast.error("Failed to save Error Proof signature."); }
   };
 
-  // ===============================================
-  //  🔥 NEW: ERROR PROOF VERIFICATION 2 LOGIC (3-Shifts)
-  // ===============================================
-  const fetchErrorReportsV2 = async () => {
-    try {
-      const res = await axios.get(`${ERR_API_BASE_V2}/hof/${currentHOF}`);
-      setErrorReportsV2(res.data);
-    } catch (err) { toast.error("Failed to load Error Proof V2 reports."); }
-  };
-
   const handleOpenErrorModalV2 = async (report) => {
     setSelectedErrorReportV2(report); setErrorPdfUrlV2(null); setIsErrorPdfLoadingV2(true); setIsErrorPdfMaximizedV2(false); 
     try {
@@ -200,11 +240,9 @@ const Hof = () => {
     setIsErrorPdfLoadingV2(false);
   };
 
-const submitErrorSignatureV2 = async () => {
+  const submitErrorSignatureV2 = async () => {
     if (errorSigCanvasV2.current.isEmpty()) { toast.warning("Please provide a signature first."); return; }
     const signatureData = errorSigCanvasV2.current.getCanvas().toDataURL("image/png");
-    
-    // 🔥 FIX: Uses the exact pre-formatted date string from the backend, eliminating timezone bugs
     const dateStr = selectedErrorReportV2.reportDate;
 
     try {
@@ -282,7 +320,7 @@ const submitErrorSignatureV2 = async () => {
           )}
         </div>
 
-        {/* 🔥 SECTION 3: ERROR PROOF VERIFICATION 2 (3-SHIFTS) */}
+        {/* SECTION 3: ERROR PROOF VERIFICATION 2 (3-SHIFTS) */}
         <div className="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-8 border-t-4 border-purple-500">
           <div className="flex justify-between items-center mb-8 border-b pb-4">
             <h1 className="text-3xl font-bold text-gray-800">Error Proof Verification 2 (Shift Wise)</h1>
@@ -311,7 +349,38 @@ const submitErrorSignatureV2 = async () => {
           )}
         </div>
 
+        {/* 🔥 SECTION 4: DAILY PRODUCTION PERFORMANCE */}
+        <div className="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-8 border-t-4 border-cyan-500">
+          <div className="flex justify-between items-center mb-8 border-b pb-4">
+            <h1 className="text-3xl font-bold text-gray-800">Daily Production Performance</h1>
+          </div>
+
+          {dailyReports.length === 0 ? (
+            <p className="text-gray-500 italic">No Daily Performance reports found for your review.</p>
+          ) : (
+            <table className="w-full text-left border-collapse border border-gray-300">
+              <thead className="bg-gray-800 text-white">
+                <tr><th className="p-3 border border-gray-300">Date</th><th className="p-3 border border-gray-300">Machine</th><th className="p-3 border border-gray-300">Status</th><th className="p-3 border border-gray-300 text-center">Action</th></tr>
+              </thead>
+              <tbody>
+                {dailyReports.map((report, idx) => {
+                  return (
+                    <tr key={idx} className="hover:bg-cyan-50">
+                      <td className="p-3 border border-gray-300 font-medium">{formatDate(report.productionDate)}</td>
+                      <td className="p-3 border border-gray-300 font-bold">DISA - {report.disa}</td>
+                      <td className="p-3 border border-gray-300">{report.hofSignature ? <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">✓ Approved</span> : <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">Pending Approval</span>}</td>
+                      <td className="p-3 border border-gray-300 text-center">{!report.hofSignature && <button onClick={() => handleOpenDailyModal(report)} className="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-1.5 rounded font-bold text-sm shadow transition-colors">Review & Sign</button>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
       </div>
+
+      {/* MODALS */}
 
       {/* BOTTOM LEVEL MODAL */}
       {selectedReport && (
@@ -375,7 +444,7 @@ const submitErrorSignatureV2 = async () => {
         </div>
       )}
 
-      {/* 🔥 NEW: ERROR PROOF V2 MODAL */}
+      {/* ERROR PROOF V2 MODAL */}
       {selectedErrorReportV2 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 transition-all">
           <div className={`bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col transition-all duration-300 ${isErrorPdfMaximizedV2 ? 'w-[98vw] h-[96vh]' : 'w-full max-w-7xl h-[90vh]'}`}>
@@ -399,6 +468,44 @@ const submitErrorSignatureV2 = async () => {
                   <div className="border-2 border-dashed border-gray-300 bg-gray-50 rounded-lg overflow-hidden mb-2"><SignatureCanvas ref={errorSigCanvasV2} penColor="blue" canvasProps={{ className: 'w-full h-48 cursor-crosshair' }} /></div>
                   <button onClick={() => errorSigCanvasV2.current.clear()} className="text-sm text-gray-500 hover:text-gray-800 font-bold underline mb-auto self-end">Clear Pad</button>
                   <div className="flex flex-col gap-3 mt-6"><button onClick={submitErrorSignatureV2} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded font-bold shadow-md">Approve & Sign</button></div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔥 NEW: DAILY PRODUCTION PERFORMANCE MODAL */}
+      {selectedDailyReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 transition-all">
+          <div className={`bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col transition-all duration-300 ${isDailyPdfMaximized ? 'w-[98vw] h-[96vh]' : 'w-full max-w-7xl h-[90vh]'}`}>
+            <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center shrink-0">
+              <h3 className="font-bold text-lg">Review & Approve Daily Performance</h3>
+              <button onClick={() => { setSelectedDailyReport(null); setDailyPdfUrl(null); }} className="text-gray-300 hover:text-white font-bold text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 flex-1 flex flex-col md:flex-row gap-6 overflow-hidden">
+              <div className="flex-1 bg-gray-100 rounded-lg border border-gray-300 overflow-hidden flex flex-col h-full relative">
+                <div className="bg-gray-200 text-gray-700 text-xs font-bold px-4 py-2 flex justify-between">
+                  <span>Document Preview</span>
+                  <button onClick={() => setIsDailyPdfMaximized(!isDailyPdfMaximized)} className="hover:text-cyan-600 flex items-center gap-1">{isDailyPdfMaximized ? <><Minimize2 size={16} /> Shrink</> : <><Maximize2 size={16} /> Expand</>}</button>
+                </div>
+                {isDailyPdfLoading ? <div className="flex-1 flex justify-center items-center"><Loader className="animate-spin text-cyan-500 w-12 h-12 mb-4" /></div> : <iframe src={`${dailyPdfUrl}#toolbar=0`} className="w-full flex-1 border-none" />}
+              </div>
+
+              {!isDailyPdfMaximized && (
+                <div className="w-full md:w-80 shrink-0 flex flex-col h-full overflow-y-auto transition-all">
+                  <div className="bg-cyan-50 p-4 rounded-lg border border-cyan-200 mb-6 text-sm flex flex-col gap-2">
+                    <p><span className="font-bold text-gray-700">Date:</span> {formatDate(selectedDailyReport.productionDate)}</p>
+                    <p><span className="font-bold text-gray-700">Machine:</span> DISA - {selectedDailyReport.disa}</p>
+                  </div>
+                  <label className="block text-gray-800 font-bold mb-2 text-sm">Sign below to verify & approve:</label>
+                  <div className="border-2 border-dashed border-gray-300 bg-gray-50 rounded-lg overflow-hidden mb-2">
+                    <SignatureCanvas ref={dailySigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-48 cursor-crosshair' }} />
+                  </div>
+                  <button onClick={() => dailySigCanvas.current.clear()} className="text-sm text-gray-500 hover:text-gray-800 font-bold underline mb-auto self-end">Clear Pad</button>
+                  <div className="flex flex-col gap-3 mt-6">
+                    <button onClick={submitDailySignature} className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-3 rounded font-bold shadow-md">Approve & Sign</button>
+                  </div>
                 </div>
               )}
             </div>

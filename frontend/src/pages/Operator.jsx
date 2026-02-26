@@ -4,8 +4,8 @@ const Operator = () => {
   const navigate = useNavigate();
 
   const buttons = [
-    { name: "Product", path: "/operator/product" },
-    { name: "Error Proof Verification 2", path: "/operator/error-proof-2" },
+    { name: "Daily Performance Report", path: "/operator/product" },
+    
     { name: "DISAmatic Production Report", path: "/operator/disamatic-report" },
     { name: "Unpoured Mould Details", path: "/operator/unpoured-mould" },
 
@@ -16,6 +16,7 @@ const Operator = () => {
     { name: "Layered Process Audit", path: "/operator/lpa" },
     { name: "DMM setting parameters checklist", path: "/operator/dmm-setting-parameters-checklist" },
     { name: "Error Proof Verification", path: "/operator/error-proof" },
+    { name: "Error Proof Verification 2", path: "/operator/error-proof-2" },
     { name: "4M Change Monitoring", path: "/operator/4m-change-monitoring" },
   ];
 

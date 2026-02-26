@@ -1,4 +1,4 @@
-const  sql  = require("../db");
+const sql = require("../db");
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
@@ -6,20 +6,17 @@ const path = require("path");
 // ==========================================
 //   SUBMIT DAILY PRODUCTION PERFORMANCE
 // ==========================================
-// ==========================================
-//   SUBMIT DAILY PRODUCTION PERFORMANCE
-// ==========================================
 exports.createDailyPerformance = async (req, res) => {
-    // Destructure 'delays' from the body
-    const { productionDate, disa, summary, details, unplannedReasons, signatures, delays } = req.body;
+    // 🔥 NEW: Destructure operatorSignature from the body
+    const { productionDate, disa, summary, details, unplannedReasons, signatures, delays, operatorSignature } = req.body;
 
     try {
-        // 1. Insert Main Report
+        // 1. Insert Main Report (Now includes operatorSignature)
         const reportResult = await sql.query`
-            INSERT INTO DailyPerformanceReport (productionDate, disa, unplannedReasons, incharge, hof, hod)
+            INSERT INTO DailyPerformanceReport (productionDate, disa, unplannedReasons, incharge, hof, hod, operatorSignature)
             OUTPUT INSERTED.id
             VALUES (${productionDate}, ${disa}, ${unplannedReasons || null}, 
-                    ${signatures.incharge || null}, ${signatures.hof || null}, ${signatures.hod || null})`;
+                    ${signatures.incharge || null}, ${signatures.hof || null}, ${signatures.hod || null}, ${operatorSignature || null})`;
 
         const reportId = reportResult.recordset[0].id;
 
@@ -39,7 +36,7 @@ exports.createDailyPerformance = async (req, res) => {
                 if (d.patternCode) { 
                     await sql.query`
                         INSERT INTO DailyPerformanceDetails (reportId, patternCode, itemDescription, planned, unplanned,
-                                                           mouldsProd, mouldsPour, cavity, unitWeight, totalWeight)
+                                                             mouldsProd, mouldsPour, cavity, unitWeight, totalWeight)
                         VALUES (${reportId}, ${d.patternCode}, ${d.itemDescription}, 
                                 ${Number(d.planned) || 0}, ${Number(d.unplanned) || 0},
                                 ${Number(d.mouldsProd) || 0}, ${Number(d.mouldsPour) || 0}, 
@@ -48,7 +45,7 @@ exports.createDailyPerformance = async (req, res) => {
             }
         }
 
-        // ⬇️ NEW: Insert Delays Data into the new Productiondelays table ⬇️
+        // 4. Insert Delays Data into the Productiondelays table
         if (delays && delays.length > 0) {
             for (let delay of delays) {
                 await sql.query`
@@ -117,9 +114,99 @@ exports.getDelaysByDateAndDisa = async (req, res) => {
   }
 };
 
+// ==========================================
+//   FETCH USERS FOR DROPDOWNS BY ROLE
+// ==========================================
+exports.getFormUsers = async (req, res) => {
+  try {
+    // Fetches supervisors for the "In-charge" dropdown
+    const incharges = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'operator' ORDER BY username ASC`;
+    // Fetches HOFs
+    const hofs = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'hof' ORDER BY username ASC`;
+    // Fetches HODs
+    const hods = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'hod' ORDER BY username ASC`;
+
+    res.json({
+      incharges: incharges.recordset,
+      hofs: hofs.recordset,
+      hods: hods.recordset
+    });
+  } catch (err) {
+    console.error("Error fetching dropdown users:", err);
+    res.status(500).json({ message: "DB Error fetching users" });
+  }
+};
 
 // ==========================================
-//          DOWNLOAD PDF REPORT
+//   HOF DASHBOARD - DAILY PERFORMANCE
+// ==========================================
+exports.getHofReports = async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await sql.query`
+      SELECT id, productionDate, disa, hofSignature, incharge, hod 
+      FROM DailyPerformanceReport 
+      WHERE hof = ${name}
+      ORDER BY productionDate DESC, id DESC
+    `;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error("HOF Fetch Error:", err);
+    res.status(500).json({ error: "Failed to fetch HOF reports" });
+  }
+};
+
+exports.signHof = async (req, res) => {
+  try {
+    const { reportId, signature } = req.body;
+    await sql.query`
+      UPDATE DailyPerformanceReport 
+      SET hofSignature = ${signature} 
+      WHERE id = ${reportId}
+    `;
+    res.json({ message: "HOF signature saved successfully" });
+  } catch (err) {
+    console.error("HOF Sign Error:", err);
+    res.status(500).json({ error: "Failed to save HOF signature" });
+  }
+};
+
+// ==========================================
+//   HOD DASHBOARD - DAILY PERFORMANCE
+// ==========================================
+exports.getHodReports = async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await sql.query`
+      SELECT id, productionDate, disa, hodSignature, incharge, hof 
+      FROM DailyPerformanceReport 
+      WHERE hod = ${name}
+      ORDER BY productionDate DESC, id DESC
+    `;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error("HOD Fetch Error:", err);
+    res.status(500).json({ error: "Failed to fetch HOD reports" });
+  }
+};
+
+exports.signHod = async (req, res) => {
+  try {
+    const { reportId, signature } = req.body;
+    await sql.query`
+      UPDATE DailyPerformanceReport 
+      SET hodSignature = ${signature} 
+      WHERE id = ${reportId}
+    `;
+    res.json({ message: "HOD signature saved successfully" });
+  } catch (err) {
+    console.error("HOD Sign Error:", err);
+    res.status(500).json({ error: "Failed to save HOD signature" });
+  }
+};
+
+// ==========================================
+//           DOWNLOAD PDF REPORT
 // ==========================================
 exports.downloadPDF = async (req, res) => {
   const { date, disa } = req.query;
@@ -129,7 +216,7 @@ exports.downloadPDF = async (req, res) => {
   }
 
   try {
-    // 1. Fetch ALL Main Reports for this Date & DISA (Latest submission first)
+    // 1. Fetch ALL Main Reports for this Date & DISA
     const reportQuery = await sql.query`
       SELECT * FROM DailyPerformanceReport 
       WHERE CAST(productionDate AS DATE) = CAST(${date} AS DATE) AND disa = ${disa}
@@ -141,7 +228,7 @@ exports.downloadPDF = async (req, res) => {
       return res.status(404).json({ message: "No report found for this Date and DISA. Please submit the form first." });
     }
 
-    // 2. Fetch Delays Data (Delays are bound to the Date/DISA, not the specific report ID)
+    // 2. Fetch Delays Data
     const delaysQuery = await sql.query`
       SELECT r.shift, d.durationMinutes as duration, d.delay as reason
       FROM DisamaticProductReport r
@@ -162,7 +249,6 @@ exports.downloadPDF = async (req, res) => {
     const pageBottom = 780; 
     let currentY = 30;
 
-    // --- SMART PAGE BREAK CHECKER ---
     const checkPageBreak = (neededHeight) => {
       if (currentY + neededHeight > pageBottom) {
         doc.addPage();
@@ -172,7 +258,6 @@ exports.downloadPDF = async (req, res) => {
       return false;
     };
 
-    // --- RECTIFIED CELL DRAWING ---
     const drawCell = (text, x, y, w, h, align = 'center', font = 'Helvetica', size = 9, isBold = false) => {
       doc.rect(x, y, w, h).stroke();
       if (text === null || text === undefined) text = "";
@@ -184,8 +269,6 @@ exports.downloadPDF = async (req, res) => {
       doc.font(finalFont).fontSize(currentSize);
 
       let innerWidth = w - 4;
-
-      // Shrink font only if a single unbroken string is still larger than the cell
       let words = content.split(/[\s\n]+/);
       let maxWordWidth = Math.max(...words.map(word => doc.widthOfString(word)));
       while (maxWordWidth > innerWidth && currentSize > 5) {
@@ -217,7 +300,7 @@ exports.downloadPDF = async (req, res) => {
 
       // 1. HEADER
       doc.rect(startX, currentY, tableWidth, 40).stroke();
-      const logoPath = path.join(__dirname, '../assets/logo.png');
+      const logoPath = path.join(__dirname, 'logo.jpg');
       if (fs.existsSync(logoPath)) {
         doc.image(logoPath, startX + 5, currentY + 5, { fit: [100, 30] });
       } else {
@@ -309,7 +392,6 @@ exports.downloadPDF = async (req, res) => {
           doc.fontSize(8);
           let innerPatW = detCols[1].w - 4;
           
-          // ⬇️ PERFECT FIX FOR OVERFLOW: Programmatically wrap text exactly at the hyphen if it is too wide ⬇️
           let safePattern = rawPattern;
           if (rawPattern.includes('-') && !rawPattern.includes(' ')) {
             let parts = rawPattern.split('-');
@@ -325,7 +407,7 @@ exports.downloadPDF = async (req, res) => {
               }
             }
             lines.push(currentLine);
-            safePattern = lines.join('\n'); // Force PDFKit to stack the text safely
+            safePattern = lines.join('\n');
           }
 
           let maxH = 20;
@@ -367,24 +449,54 @@ exports.downloadPDF = async (req, res) => {
       drawCell(detTotalWeight > 0 ? Math.round(detTotalWeight) : "", xPos, currentY, detCols[8].w, 20, 'center', 'Helvetica', 9, true);
       currentY += 30; 
 
-      // FOOTER REASONS & SIGNATURES
+      // ==========================================
+      // 🔥 FOOTER REASONS & SIGNATURES UPDATE
+      // ==========================================
       checkPageBreak(80); 
       doc.rect(startX, currentY, tableWidth, 40).stroke();
       doc.font('Helvetica-Bold').fontSize(8).text("Reasons for producing un-planned items.", startX + 5, currentY + 5);
       doc.font('Helvetica').text(report.unplannedReasons || "-", startX + 5, currentY + 15, { width: tableWidth - 10 });
       currentY += 40;
 
-      doc.rect(startX, currentY, tableWidth, 30).stroke();
-      doc.font('Helvetica-Bold').fontSize(9);
-      doc.text(`In-charge: ${report.incharge || "-"}`, startX + 20, currentY + 15);
-      doc.text(`HOF: ${report.hof || "-"}`, startX + 250, currentY + 15);
-      doc.text(`HOD - Production: ${report.hod || "-"}`, startX + 400, currentY + 15);
-      currentY += 30; 
+      // Draw the Signature Box (Taller to fit images above text)
+      doc.rect(startX, currentY, tableWidth, 50).stroke();
+      
+      // 1. Draw Operator Signature Image
+      if (report.operatorSignature && report.operatorSignature.startsWith('data:image')) {
+          try {
+              const imgBuffer = Buffer.from(report.operatorSignature.split('base64,')[1], 'base64');
+              doc.image(imgBuffer, startX + 20, currentY + 5, { fit: [100, 25] });
+          } catch(e) {}
+      }
 
-          currentY += 15;
-    checkPageBreak(20);
-    doc.font('Helvetica').fontSize(8).fillColor('black');
-    doc.text("QF/07/FBP-15, Rev.No:01 dt 10.06.2019", startX, currentY);
+      // 2. Draw HOF Signature Image (We will build the HOF signing step next!)
+      if (report.hofSignature && report.hofSignature.startsWith('data:image')) {
+          try {
+              const imgBuffer = Buffer.from(report.hofSignature.split('base64,')[1], 'base64');
+              doc.image(imgBuffer, startX + 220, currentY + 5, { fit: [100, 25] });
+          } catch(e) {}
+      }
+
+      // 3. Draw HOD Signature Image (We will build the HOD signing step next!)
+      if (report.hodSignature && report.hodSignature.startsWith('data:image')) {
+          try {
+              const imgBuffer = Buffer.from(report.hodSignature.split('base64,')[1], 'base64');
+              doc.image(imgBuffer, startX + 400, currentY + 5, { fit: [100, 25] });
+          } catch(e) {}
+      }
+
+      // Draw Signature Text Labels
+      doc.font('Helvetica-Bold').fontSize(9);
+      doc.text(`In-charge: ${report.incharge || "-"}`, startX + 20, currentY + 35);
+      doc.text(`HOF: ${report.hof || "-"}`, startX + 220, currentY + 35);
+      doc.text(`HOD - Production: ${report.hod || "-"}`, startX + 400, currentY + 35);
+      currentY += 50; 
+
+      currentY += 15;
+      checkPageBreak(20);
+      doc.font('Helvetica').fontSize(8).fillColor('black');
+      doc.text("QF/07/FBP-15, Rev.No:01 dt 10.06.2019", startX, currentY);
+
       // --- PAGE 2: DELAYS SECTION ---
       doc.addPage();
       currentY = 30;

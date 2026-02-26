@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+import SignatureCanvas from "react-signature-canvas";
 
 // --- HELPER: Calculate Production Date (Strict 7 AM to 7 AM Logic) ---
 const getProductionDate = () => {
@@ -83,18 +84,30 @@ const DailyProductionPerformance = () => {
   const [disa, setDisa] = useState(""); 
   const [resetKey, setResetKey] = useState(0);
 
+  const opSigCanvas = useRef({});
+
   // --- DROPDOWN DATA ---
   const [components, setComponents] = useState([]);
+  
+  // 🔥 NEW: Separate states for each role
   const [incharges, setIncharges] = useState([]);
+  const [hofs, setHofs] = useState([]);
+  const [hods, setHods] = useState([]);
 
   useEffect(() => {
+    // Fetch Component Codes
     axios.get("http://localhost:5000/api/components")
       .then((res) => setComponents(res.data))
       .catch((err) => console.error("Failed to fetch components", err));
 
-    axios.get("http://localhost:5000/api/incharges")
-      .then((res) => setIncharges(res.data))
-      .catch((err) => console.error("Failed to fetch incharges", err));
+    // 🔥 NEW: Fetch segregated users from the new endpoint
+    axios.get("http://localhost:5000/api/daily-performance/users")
+      .then((res) => {
+        setIncharges(res.data.incharges || []);
+        setHofs(res.data.hofs || []);
+        setHods(res.data.hods || []);
+      })
+      .catch((err) => console.error("Failed to fetch users", err));
   }, []);
 
   // --- STATE: SUMMARY TABLE ---
@@ -104,10 +117,9 @@ const DailyProductionPerformance = () => {
     III: { pouredMoulds: "", tonnage: "", casted: "", value: "" },
   });
 
-  // --- STATE: DELAYS TABLE (Fetched automatically) ---
+  // --- STATE: DELAYS TABLE ---
   const [delays, setDelays] = useState([]);
 
-  // Auto-fetch Summary & Delays data when Date OR DISA changes
   useEffect(() => {
     const fetchData = async () => {
       if (!productionDate || !disa) {
@@ -116,7 +128,6 @@ const DailyProductionPerformance = () => {
       }
       
       try {
-        // Fetch Summary Stats
         const sumRes = await axios.get(`http://localhost:5000/api/daily-performance/summary?date=${productionDate}&disa=${disa}`);
         const fetchedData = sumRes.data;
         
@@ -138,7 +149,6 @@ const DailyProductionPerformance = () => {
           return newSummary;
         });
 
-        // Fetch Delays
         const delayRes = await axios.get(`http://localhost:5000/api/daily-performance/delays?date=${productionDate}&disa=${disa}`);
         setDelays(delayRes.data);
 
@@ -153,15 +163,8 @@ const DailyProductionPerformance = () => {
   // --- STATE: DETAILS TABLE ---
   const [details, setDetails] = useState([
     {
-      patternCode: "",
-      itemDescription: "",
-      planned: "",     
-      unplanned: "",   
-      mouldsProd: "",
-      mouldsPour: "",
-      cavity: "",
-      unitWeight: "",
-      totalWeight: "",
+      patternCode: "", itemDescription: "", planned: "", unplanned: "", 
+      mouldsProd: "", mouldsPour: "", cavity: "", unitWeight: "", totalWeight: "",
     },
   ]);
 
@@ -202,10 +205,8 @@ const DailyProductionPerformance = () => {
 
   const handleComponentSelect = (index, item) => {
     const updated = [...details];
-    
     updated[index].patternCode = item.code;
     updated[index].itemDescription = item.description;
-    
     updated[index].cavity = item.cavity !== null && item.cavity !== undefined ? item.cavity : "";
     updated[index].unitWeight = item.pouredWeight !== null && item.pouredWeight !== undefined ? item.pouredWeight : "";
 
@@ -239,24 +240,24 @@ const DailyProductionPerformance = () => {
     { mouldsProd: 0, mouldsPour: 0, totalWeight: 0 }
   );
 
- const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (opSigCanvas.current.isEmpty()) {
+      toast.warning("Please provide an Operator Signature.");
+      return;
+    }
+    const signatureData = opSigCanvas.current.getCanvas().toDataURL("image/png");
+
     const payload = {
-        productionDate,
-        disa,
-        summary,
-        details,
-        unplannedReasons,
-        signatures,
-        delays // ⬅️ This now sends the auto-filled delay data to be saved permanently
+        productionDate, disa, summary, details, unplannedReasons, signatures, delays,
+        operatorSignature: signatureData 
     };
 
     try {
         await axios.post("http://localhost:5000/api/daily-performance", payload);
         toast.success("Report saved successfully!");
         
-        // Reset Logic...
         setSummary({
             I: { pouredMoulds: "", tonnage: "", casted: "", value: "" },
             II: { pouredMoulds: "", tonnage: "", casted: "", value: "" },
@@ -266,13 +267,14 @@ const DailyProductionPerformance = () => {
         setUnplannedReasons("");
         setSignatures({ incharge: "", hof: "", hod: "" });
         setDisa(""); 
+        opSigCanvas.current.clear(); 
         setResetKey(prev => prev + 1); 
 
     } catch (err) {
         console.error(err);
         toast.error("Submission failed.");
     }
-};
+  };
 
   const handleDownload = async () => {
     if (!disa || !productionDate) {
@@ -321,9 +323,7 @@ const DailyProductionPerformance = () => {
             <div className="w-40">
               <label className="font-bold text-gray-700 block mb-1 text-sm">DISA- *</label>
               <select 
-                name="disa" 
-                required 
-                value={disa} 
+                name="disa" required value={disa} 
                 onChange={(e) => setDisa(e.target.value)} 
                 className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 text-sm font-semibold"
               >
@@ -338,9 +338,7 @@ const DailyProductionPerformance = () => {
             <div className="w-48">
               <label className="font-bold text-gray-700 block mb-1 text-sm">DATE OF PRODUCTION :</label>
               <input 
-                type="date" 
-                value={productionDate} 
-                readOnly
+                type="date" value={productionDate} readOnly
                 className="w-full border border-gray-300 p-2 rounded bg-gray-100 cursor-not-allowed outline-none text-sm font-semibold text-gray-500" 
               />
             </div>
@@ -366,43 +364,16 @@ const DailyProductionPerformance = () => {
                   <tr key={shift} className="bg-white">
                     <td className="border border-gray-800 p-2 font-bold bg-gray-50">{shift}</td>
                     <td className="border border-gray-800 p-0">
-                      <input 
-                        type="number" 
-                        value={summary[shift].pouredMoulds} 
-                        readOnly
-                        placeholder="Auto"
-                        className="w-full h-full text-center outline-none bg-gray-50 py-2 cursor-not-allowed font-semibold text-gray-600" 
-                      />
+                      <input type="number" value={summary[shift].pouredMoulds} readOnly placeholder="Auto" className="w-full h-full text-center outline-none bg-gray-50 py-2 cursor-not-allowed font-semibold text-gray-600" />
                     </td>
                     <td className="border border-gray-800 p-0">
-                      <input 
-                        type="number" 
-                        step="0.001" 
-                        value={summary[shift].tonnage} 
-                        readOnly
-                        placeholder="Auto"
-                        className="w-full h-full text-center outline-none bg-gray-50 py-2 cursor-not-allowed font-semibold text-gray-600" 
-                      />
+                      <input type="number" step="0.001" value={summary[shift].tonnage} readOnly placeholder="Auto" className="w-full h-full text-center outline-none bg-gray-50 py-2 cursor-not-allowed font-semibold text-gray-600" />
                     </td>
                     <td className="border border-gray-800 p-0">
-                      <input 
-                        type="number" 
-                        step="0.01" 
-                        required
-                        value={summary[shift].casted} 
-                        onChange={(e) => handleSummaryChange(shift, "casted", e.target.value)} 
-                        className="w-full h-full text-center outline-none bg-transparent py-2" 
-                      />
+                      <input type="number" step="0.01" required value={summary[shift].casted} onChange={(e) => handleSummaryChange(shift, "casted", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2" />
                     </td>
                     <td className="border border-gray-800 p-0">
-                      <input 
-                        type="number" 
-                        step="0.01" 
-                        required
-                        value={summary[shift].value} 
-                        onChange={(e) => handleSummaryChange(shift, "value", e.target.value)} 
-                        className="w-full h-full text-center outline-none bg-transparent py-2" 
-                      />
+                      <input type="number" step="0.01" required value={summary[shift].value} onChange={(e) => handleSummaryChange(shift, "value", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2" />
                     </td>
                   </tr>
                 ))}
@@ -421,9 +392,7 @@ const DailyProductionPerformance = () => {
           {/* 2. DETAILS TABLE */}
           <div>
             <div className="flex items-center justify-end mb-2">
-              <button type="button" onClick={addDetailRow} className="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-1 rounded shadow text-sm">
-                + Add Row
-              </button>
+              <button type="button" onClick={addDetailRow} className="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-1 rounded shadow text-sm">+ Add Row</button>
             </div>
             
             <table className="w-full border-collapse border border-gray-800 text-sm text-center relative z-0">
@@ -452,11 +421,8 @@ const DailyProductionPerformance = () => {
                     <td className="border border-gray-800 p-1 relative overflow-visible">
                       <SearchableSelect 
                         key={`pattern-${index}-${resetKey}`}
-                        options={components} 
-                        displayKey="code" 
-                        required
-                        value={row.patternCode} 
-                        placeholder="Select Code"
+                        options={components} displayKey="code" required
+                        value={row.patternCode} placeholder="Select Code"
                         onSelect={(item) => handleComponentSelect(index, item)} 
                       />
                     </td>
@@ -464,51 +430,31 @@ const DailyProductionPerformance = () => {
                     <td className="border border-gray-800 p-0">
                       <input type="text" value={row.itemDescription} readOnly className="w-full h-full text-left outline-none bg-gray-50 text-gray-700 py-2 px-2 cursor-not-allowed" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <input type="number" required value={row.planned} onChange={(e) => handleDetailChange(index, "planned", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <input type="number" required value={row.unplanned} onChange={(e) => handleDetailChange(index, "unplanned", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <input type="number" required value={row.mouldsProd} onChange={(e) => handleDetailChange(index, "mouldsProd", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <input type="number" required value={row.mouldsPour} onChange={(e) => handleDetailChange(index, "mouldsPour", e.target.value)} className="w-full h-full text-center outline-none bg-transparent py-2 font-bold" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <input type="number" value={row.cavity} readOnly className="w-full h-full text-center outline-none bg-gray-50 text-gray-700 py-2 cursor-not-allowed font-bold" />
                     </td>
-                    
                     <td className="border border-gray-800 p-0">
                       <div className="flex items-center justify-center w-full h-full gap-1 px-1 font-semibold text-gray-700">
                         <span>[</span>
-                        <input 
-                          type="number" 
-                          step="0.001" 
-                          placeholder="Wt" 
-                          value={row.unitWeight} 
-                          readOnly
-                          className="w-12 text-center outline-none border-b border-gray-400 bg-transparent py-1 font-normal text-gray-500 cursor-not-allowed" 
-                        />
+                        <input type="number" step="0.001" placeholder="Wt" value={row.unitWeight} readOnly className="w-12 text-center outline-none border-b border-gray-400 bg-transparent py-1 font-normal text-gray-500 cursor-not-allowed" />
                         <span className="mx-1">X</span>
-                        <input 
-                          type="number" 
-                          value={row.mouldsPour} 
-                          readOnly 
-                          placeholder="Qty"
-                          className="w-12 text-center outline-none border-b border-gray-400 bg-transparent py-1 font-normal text-gray-500 cursor-not-allowed" 
-                        />
+                        <input type="number" value={row.mouldsPour} readOnly placeholder="Qty" className="w-12 text-center outline-none border-b border-gray-400 bg-transparent py-1 font-normal text-gray-500 cursor-not-allowed" />
                         <span>] =</span>
                         <span className="w-16 text-right pr-1 text-black font-bold">{row.totalWeight}</span>
                       </div>
                     </td>
-                    
                     <td className="border border-gray-800 p-0 text-center">
                       {details.length > 1 && (
                         <button type="button" onClick={() => removeDetailRow(index)} className="text-red-500 font-bold hover:text-red-700 w-full h-full" title="Remove Row">✕</button>
@@ -519,21 +465,14 @@ const DailyProductionPerformance = () => {
                 
                 {/* DETAILS TOTAL ROW */}
                 <tr className="bg-gray-100 font-bold text-gray-800 border-t-2 border-gray-800">
-                  <td className="border border-gray-800 p-2"></td>
-                  <td className="border border-gray-800 p-2"></td>
-                  <td className="border border-gray-800 p-2"></td>
-                  <td className="border border-gray-800 p-2"></td>
+                  <td className="border border-gray-800 p-2"></td><td className="border border-gray-800 p-2"></td><td className="border border-gray-800 p-2"></td><td className="border border-gray-800 p-2"></td>
                   <td className="border border-gray-800 p-2 text-center text-black tracking-widest text-sm">TOTAL</td>
                   <td className="border border-gray-800 p-2 text-center text-black">{detailTotals.mouldsProd > 0 ? detailTotals.mouldsProd : ""}</td>
                   <td className="border border-gray-800 p-2 text-center text-black">{detailTotals.mouldsPour > 0 ? detailTotals.mouldsPour : ""}</td>
                   <td className="border border-gray-800 p-2 bg-gray-100"></td>
                   <td className="border border-gray-800 p-0">
                     <div className="flex items-center justify-center w-full h-full gap-1 px-1 font-bold text-gray-800">
-                      <span>[</span>
-                      <span className="w-12 text-center inline-block"></span>
-                      <span className="mx-1">X</span>
-                      <span className="w-12 text-center inline-block"></span>
-                      <span>] =</span>
+                      <span>[</span><span className="w-12 text-center inline-block"></span><span className="mx-1">X</span><span className="w-12 text-center inline-block"></span><span>] =</span>
                       <span className="w-16 text-right pr-1 text-black">{detailTotals.totalWeight > 0 ? Math.round(detailTotals.totalWeight) : ""}</span>
                     </div>
                   </td>
@@ -543,13 +482,11 @@ const DailyProductionPerformance = () => {
             </table>
           </div>
 
-          {/* 3. PRODUCTION DELAYS TABLE (Auto-Fetched) */}
+          {/* 3. PRODUCTION DELAYS TABLE */}
           <div>
             <table className="w-full border-collapse border border-gray-800 text-sm text-center">
               <thead className="bg-gray-100 text-gray-800 font-bold">
-                <tr>
-                  <th className="border border-gray-800 p-2 bg-gray-200" colSpan="4">Production delays / Remarks</th>
-                </tr>
+                <tr><th className="border border-gray-800 p-2 bg-gray-200" colSpan="4">Production delays / Remarks</th></tr>
                 <tr>
                   <th className="border border-gray-800 p-2 w-16">S.No.</th>
                   <th className="border border-gray-800 p-2 w-32">Shift</th>
@@ -558,22 +495,15 @@ const DailyProductionPerformance = () => {
                 </tr>
               </thead>
               <tbody>
-                {/* ⬇️ ONLY RENDER ROWS IF THERE IS ACTUAL DELAY DATA ⬇️ */}
                 {delays.length > 0 ? (
                   delays.map((delay, index) => (
                     <tr key={index} className="bg-white">
-                      <td className="border border-gray-800 p-2">{index + 1}</td>
-                      <td className="border border-gray-800 p-2">{delay.shift}</td>
-                      <td className="border border-gray-800 p-2">{delay.duration}</td>
-                      <td className="border border-gray-800 p-2 text-left px-4">{delay.reason}</td>
+                      <td className="border border-gray-800 p-2">{index + 1}</td><td className="border border-gray-800 p-2">{delay.shift}</td>
+                      <td className="border border-gray-800 p-2">{delay.duration}</td><td className="border border-gray-800 p-2 text-left px-4">{delay.reason}</td>
                     </tr>
                   ))
                 ) : (
-                  <tr className="bg-white h-10">
-                    <td className="border border-gray-800 p-2 text-gray-500 font-semibold italic" colSpan="4">
-                      {disa ? "No delays recorded for this date and DISA." : "Select DISA to view delays."}
-                    </td>
-                  </tr>
+                  <tr className="bg-white h-10"><td className="border border-gray-800 p-2 text-gray-500 font-semibold italic" colSpan="4">{disa ? "No delays recorded for this date and DISA." : "Select DISA to view delays."}</td></tr>
                 )}
               </tbody>
             </table>
@@ -581,49 +511,39 @@ const DailyProductionPerformance = () => {
 
           {/* 4. FOOTER & REASONS */}
           <div className="border-2 border-gray-800 flex flex-col min-h-[100px]">
-            <div className="px-2 py-1 font-bold text-gray-800 text-sm border-b border-gray-400">
-              Reasons for producing un-planned items.
-            </div>
-            <textarea
-              className="w-full h-full p-2 outline-none resize-none text-sm bg-transparent"
-              placeholder="Type reasons here (Optional)..."
-              value={unplannedReasons}
-              onChange={(e) => setUnplannedReasons(e.target.value)}
-            />
+            <div className="px-2 py-1 font-bold text-gray-800 text-sm border-b border-gray-400">Reasons for producing un-planned items.</div>
+            <textarea className="w-full h-full p-2 outline-none resize-none text-sm bg-transparent" placeholder="Type reasons here (Optional)..." value={unplannedReasons} onChange={(e) => setUnplannedReasons(e.target.value)} />
           </div>
 
-          {/* 5. SIGNATURES (Using SearchableSelect) */}
-          <div className="flex justify-between items-end mt-12 mb-4 px-10">
+          {/* 5. SIGNATURES & ASSIGNMENTS */}
+          <div className="flex justify-between items-end mt-8 mb-4 px-10 gap-6">
+            <div className="flex flex-col w-64">
+                <label className="font-bold text-gray-700 block mb-1 text-sm text-center">Operator Signature *</label>
+                <div className="border-2 border-dashed border-gray-400 rounded-lg overflow-hidden h-24 mb-1">
+                    <SignatureCanvas ref={opSigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-full cursor-crosshair bg-gray-50' }} />
+                </div>
+                <button type="button" onClick={() => opSigCanvas.current.clear()} className="text-xs text-red-500 hover:text-red-700 font-bold self-end uppercase">Clear</button>
+            </div>
+            
+            {/* 🔥 USES DEDICATED FETCHED USERS */}
             <div className="w-64">
               <SearchableSelect 
-                key={`sign-inc-${resetKey}`}
-                label="In-charge" 
-                options={incharges} 
-                displayKey="name" 
-                required
-                value={signatures.incharge} 
+                key={`sign-inc-${resetKey}`} label="Assign In-charge *" required
+                options={incharges} displayKey="name" value={signatures.incharge} 
                 onSelect={(item) => setSignatures({...signatures, incharge: item.name})} 
               />
             </div>
             <div className="w-64">
               <SearchableSelect 
-                key={`sign-hof-${resetKey}`}
-                label="HOF" 
-                options={incharges} 
-                displayKey="name" 
-                required
-                value={signatures.hof} 
+                key={`sign-hof-${resetKey}`} label="Assign HOF *" required
+                options={hofs} displayKey="name" value={signatures.hof} 
                 onSelect={(item) => setSignatures({...signatures, hof: item.name})} 
               />
             </div>
             <div className="w-64">
               <SearchableSelect 
-                key={`sign-hod-${resetKey}`}
-                label="HOD - Production" 
-                options={incharges} 
-                displayKey="name" 
-                required
-                value={signatures.hod} 
+                key={`sign-hod-${resetKey}`} label="Assign HOD - Production *" required
+                options={hods} displayKey="name" value={signatures.hod} 
                 onSelect={(item) => setSignatures({...signatures, hod: item.name})} 
               />
             </div>
@@ -631,12 +551,8 @@ const DailyProductionPerformance = () => {
           
           {/* BUTTONS */}
           <div className="flex justify-end gap-4 mt-2 pt-4 border-t border-gray-300">
-            <button type="button" onClick={handleDownload} className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-2 rounded font-bold transition-colors flex items-center gap-2 shadow-lg">
-              <span>⬇️</span> Generate Report (PDF)
-            </button>
-            <button type="submit" className="bg-orange-500 hover:bg-orange-600 text-white px-10 py-3 rounded font-bold transition-colors shadow-lg">
-              Submit Form
-            </button>
+            <button type="button" onClick={handleDownload} className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-2 rounded font-bold transition-colors flex items-center gap-2 shadow-lg"><span>⬇️</span> Generate Report (PDF)</button>
+            <button type="submit" className="bg-orange-500 hover:bg-orange-600 text-white px-10 py-3 rounded font-bold transition-colors shadow-lg">Submit & Send to HOF/HOD</button>
           </div>
 
         </form>

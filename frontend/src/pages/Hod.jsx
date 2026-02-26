@@ -16,7 +16,7 @@ const Hod = () => {
   const [isPdfMaximized, setIsPdfMaximized] = useState(false); 
   const sigCanvas = useRef({});
   
-  // 🔥 New state for 4M Change Reports
+  // 4M Change Reports
   const [fourMReports, setFourMReports] = useState([]);
   const [selectedFourMReport, setSelectedFourMReport] = useState(null);
   const [fourMPdfUrl, setFourMPdfUrl] = useState(null);
@@ -24,12 +24,23 @@ const Hod = () => {
   const [isFourMPdfMaximized, setIsFourMPdfMaximized] = useState(false);
   const fourMSigCanvas = useRef({});
 
+  // 🔥 NEW: Daily Production Performance
+  const [dailyReports, setDailyReports] = useState([]);
+  const [selectedDailyReport, setSelectedDailyReport] = useState(null);
+  const [dailyPdfUrl, setDailyPdfUrl] = useState(null);
+  const [isDailyPdfLoading, setIsDailyPdfLoading] = useState(false);
+  const [isDailyPdfMaximized, setIsDailyPdfMaximized] = useState(false);
+  const dailySigCanvas = useRef({});
+
   const storedUser = JSON.parse(localStorage.getItem("user") || "{}");
   const currentHOD = storedUser.username || "hod_user";
+
+  const DAILY_API_BASE = 'http://localhost:5000/api/daily-performance'; // 🔥 NEW API BASE
 
   useEffect(() => {
     fetchReports();
     fetchFourMReports();
+    fetchDailyReports(); // 🔥 Fetch Daily Reports
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -163,7 +174,7 @@ const Hod = () => {
   };
 
   // ===============================================
-  //  🔥 4M CHANGE MONITORING LOGIC (NEW)
+  //  4M CHANGE MONITORING LOGIC
   // ===============================================
   const fetchFourMReports = async () => {
     try {
@@ -199,6 +210,41 @@ const Hod = () => {
     } catch (err) { toast.error("Failed to save 4M signature."); }
   };
 
+  // ===============================================
+  //  🔥 NEW: DAILY PRODUCTION PERFORMANCE LOGIC
+  // ===============================================
+  const fetchDailyReports = async () => {
+    try {
+      const res = await axios.get(`${DAILY_API_BASE}/hod/${currentHOD}`);
+      setDailyReports(res.data);
+    } catch (err) { toast.error("Failed to load Daily Performance reports."); }
+  };
+
+  const handleOpenDailyModal = async (report) => {
+    setSelectedDailyReport(report); setDailyPdfUrl(null); setIsDailyPdfLoading(true); setIsDailyPdfMaximized(false); 
+    try {
+      const dateStr = new Date(report.productionDate).toISOString().split('T')[0];
+      const response = await axios.get(`${DAILY_API_BASE}/download-pdf`, { 
+        params: { date: dateStr, disa: report.disa }, 
+        responseType: 'blob' 
+      });
+      const pdfBlobUrl = URL.createObjectURL(response.data);
+      setDailyPdfUrl(pdfBlobUrl);
+    } catch (error) { toast.error("Failed to load Daily Performance PDF."); }
+    setIsDailyPdfLoading(false);
+  };
+
+  const submitDailySignature = async () => {
+    if (dailySigCanvas.current.isEmpty()) { toast.warning("Please provide a signature first."); return; }
+    const signatureData = dailySigCanvas.current.getCanvas().toDataURL("image/png");
+
+    try {
+      await axios.post(`${DAILY_API_BASE}/sign-hod`, { reportId: selectedDailyReport.id, signature: signatureData });
+      toast.success("Daily Performance Report signed!");
+      setSelectedDailyReport(null); fetchDailyReports(); 
+    } catch (err) { toast.error("Failed to save Daily Performance signature."); }
+  };
+
   return (
     <>
       <Header />
@@ -232,7 +278,7 @@ const Hod = () => {
           )}
         </div>
 
-        {/* 🔥 SECTION 2: 4M CHANGE MONITORING */}
+        {/* SECTION 2: 4M CHANGE MONITORING */}
         <div className="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-8 border-t-4 border-green-500">
           <div className="flex justify-between items-center mb-6 border-b pb-4"><h1 className="text-2xl font-bold text-gray-800">4M Change Monitoring</h1></div>
           {fourMReports.length === 0 ? <p className="text-gray-500 italic">No 4M Change forms pending your signature.</p> : (
@@ -250,6 +296,35 @@ const Hod = () => {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+
+        {/* 🔥 SECTION 3: DAILY PRODUCTION PERFORMANCE */}
+        <div className="max-w-6xl mx-auto bg-white rounded-xl shadow-2xl p-8 border-t-4 border-cyan-500">
+          <div className="flex justify-between items-center mb-8 border-b pb-4">
+            <h1 className="text-3xl font-bold text-gray-800">Daily Production Performance</h1>
+          </div>
+
+          {dailyReports.length === 0 ? (
+            <p className="text-gray-500 italic">No Daily Performance reports found for your review.</p>
+          ) : (
+            <table className="w-full text-left border-collapse border border-gray-300">
+              <thead className="bg-gray-800 text-white">
+                <tr><th className="p-3 border border-gray-300">Date</th><th className="p-3 border border-gray-300">Machine</th><th className="p-3 border border-gray-300">Status</th><th className="p-3 border border-gray-300 text-center">Action</th></tr>
+              </thead>
+              <tbody>
+                {dailyReports.map((report, idx) => {
+                  return (
+                    <tr key={idx} className="hover:bg-cyan-50">
+                      <td className="p-3 border border-gray-300 font-medium">{formatDate(report.productionDate)}</td>
+                      <td className="p-3 border border-gray-300 font-bold">DISA - {report.disa}</td>
+                      <td className="p-3 border border-gray-300">{report.hodSignature ? <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">✓ Approved</span> : <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">Pending Approval</span>}</td>
+                      <td className="p-3 border border-gray-300 text-center">{!report.hodSignature && <button onClick={() => handleOpenDailyModal(report)} className="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-1.5 rounded font-bold text-sm shadow transition-colors">Review & Sign</button>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
 
@@ -276,7 +351,7 @@ const Hod = () => {
         </div>
       )}
 
-      {/* 🔥 4M CHANGE MODAL */}
+      {/* 4M CHANGE MODAL */}
       {selectedFourMReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 transition-all">
           <div className={`bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col transition-all duration-300 ${isFourMPdfMaximized ? 'w-[98vw] h-[96vh]' : 'w-full max-w-7xl h-[90vh]'}`}>
@@ -306,6 +381,44 @@ const Hod = () => {
                   </div>
                   <button onClick={() => fourMSigCanvas.current.clear()} className="text-sm text-gray-500 hover:text-gray-800 font-bold underline mb-auto self-end">Clear Pad</button>
                   <div className="flex flex-col gap-3 mt-6"><button onClick={submitFourMSignature} className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded font-bold shadow-md text-lg">Approve & Sign</button></div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔥 NEW: DAILY PRODUCTION PERFORMANCE MODAL */}
+      {selectedDailyReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 transition-all">
+          <div className={`bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col transition-all duration-300 ${isDailyPdfMaximized ? 'w-[98vw] h-[96vh]' : 'w-full max-w-7xl h-[90vh]'}`}>
+            <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center shrink-0">
+              <h3 className="font-bold text-lg">Review & Approve Daily Performance</h3>
+              <button onClick={() => { setSelectedDailyReport(null); setDailyPdfUrl(null); }} className="text-gray-300 hover:text-white font-bold text-2xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 flex-1 flex flex-col md:flex-row gap-6 overflow-hidden">
+              <div className="flex-1 bg-gray-100 rounded-lg border border-gray-300 overflow-hidden flex flex-col h-full relative">
+                <div className="bg-gray-200 text-gray-700 text-xs font-bold px-4 py-2 flex justify-between">
+                  <span>Document Preview</span>
+                  <button onClick={() => setIsDailyPdfMaximized(!isDailyPdfMaximized)} className="hover:text-cyan-600 flex items-center gap-1">{isDailyPdfMaximized ? <><Minimize2 size={16} /> Shrink</> : <><Maximize2 size={16} /> Expand</>}</button>
+                </div>
+                {isDailyPdfLoading ? <div className="flex-1 flex justify-center items-center"><Loader className="animate-spin text-cyan-500 w-12 h-12 mb-4" /></div> : <iframe src={`${dailyPdfUrl}#toolbar=0`} className="w-full flex-1 border-none" />}
+              </div>
+
+              {!isDailyPdfMaximized && (
+                <div className="w-full md:w-80 shrink-0 flex flex-col h-full overflow-y-auto transition-all">
+                  <div className="bg-cyan-50 p-4 rounded-lg border border-cyan-200 mb-6 text-sm flex flex-col gap-2">
+                    <p><span className="font-bold text-gray-700">Date:</span> {formatDate(selectedDailyReport.productionDate)}</p>
+                    <p><span className="font-bold text-gray-700">Machine:</span> DISA - {selectedDailyReport.disa}</p>
+                  </div>
+                  <label className="block text-gray-800 font-bold mb-2 text-sm">Sign below to verify & approve:</label>
+                  <div className="border-2 border-dashed border-gray-300 bg-gray-50 rounded-lg overflow-hidden mb-2">
+                    <SignatureCanvas ref={dailySigCanvas} penColor="blue" canvasProps={{ className: 'w-full h-48 cursor-crosshair' }} />
+                  </div>
+                  <button onClick={() => dailySigCanvas.current.clear()} className="text-sm text-gray-500 hover:text-gray-800 font-bold underline mb-auto self-end">Clear Pad</button>
+                  <div className="flex flex-col gap-3 mt-6">
+                    <button onClick={submitDailySignature} className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-3 rounded font-bold shadow-md">Approve & Sign</button>
+                  </div>
                 </div>
               )}
             </div>

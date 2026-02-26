@@ -376,7 +376,7 @@ exports.downloadAllReports = async (req, res) => {
       let currentY = 30;
       doc.rect(startX, currentY, tableWidth, 60).stroke();
       
-      const logoPath = path.join(__dirname, '../assets/logo.png');
+      const logoPath = path.join(__dirname, 'logo.jpg');
       if (fs.existsSync(logoPath)) {
         doc.image(logoPath, startX + 5, currentY + 10, { fit: [120, 40], align: 'center', valign: 'center' });
       } else {
