@@ -13,6 +13,7 @@ const dmmRoutes = require('./routes/dmmRoutes');
 const bottomLevelRoutes = require('./routes/bottomLevelRoutes');
 const errorProofRoutes2 = require('./routes/errorProofRoutes2');
 const userRoutes = require("./routes/userRoutes");
+const dailyPerformanceRoutes = require("./routes/dailyPerformanceRoutes");
 
 const app = express();
 
@@ -33,8 +34,9 @@ app.use("/api/error-proof", errorProofRoutes);
 app.use('/api/unpoured-moulds', mouldRoutes);
 app.use('/api/dmm-settings', dmmRoutes);
 app.use('/api/bottom-level-audit', bottomLevelRoutes);
-app.use('/api/error-proof', errorProofRoutes2);
+app.use('/api/error-proof2', errorProofRoutes2);
 app.use("/api/users", userRoutes);
+app.use("/api", dailyPerformanceRoutes);
 
 app.listen(5000, () => {
   console.log("Server running on port 5000");

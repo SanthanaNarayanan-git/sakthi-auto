@@ -12,11 +12,12 @@ router.get("/operators", formController.getOperators);
 
 // --- Form Transaction Routes ---
 router.get("/forms/last-mould-counter", formController.getLastMouldCounter);
-
-// ⬇️ NEW ROUTE ADDED HERE ⬇️
 router.get("/forms/last-personnel", formController.getLastPersonnel);
-
 router.post("/forms", formController.createReport);
 router.get("/forms/download-pdf", formController.downloadAllReports);
+
+// ⬇️ NEW SUPERVISOR ROUTES ADDED HERE ⬇️
+router.get("/forms/supervisor/:name", formController.getReportsBySupervisor);
+router.post("/forms/sign", formController.signReport);
 
 module.exports = router;

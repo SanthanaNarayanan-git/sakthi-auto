@@ -8,7 +8,7 @@ const path = require("path");
 // ==========================================
 exports.getComponents = async (req, res) => {
   try {
-    const result = await sql.query("SELECT code, description, pouredWeight FROM Component");
+    const result = await sql.query("SELECT code, description, pouredWeight, cavity FROM Component");
     res.json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch components" });
@@ -24,7 +24,6 @@ exports.getDelayReasons = async (req, res) => {
   }
 };
 
-// Fetch from Users table where role = 'operator'
 exports.getEmployees = async (req, res) => {
   try {
     const result = await sql.query`SELECT id, username as name FROM Users WHERE role = 'operator' ORDER BY username`;
@@ -34,7 +33,6 @@ exports.getEmployees = async (req, res) => {
   }
 };
 
-// Fetch from Users table where role = 'operator'
 exports.getIncharges = async (req, res) => {
   try {
     const result = await sql.query`SELECT id, username as name FROM Users WHERE role = 'operator' ORDER BY username`;
@@ -44,7 +42,6 @@ exports.getIncharges = async (req, res) => {
   }
 };
 
-// Fetch from Users table where role = 'operator'
 exports.getOperators = async (req, res) => {
   try {
     const result = await sql.query`SELECT id, username as operatorName FROM Users WHERE role = 'operator' ORDER BY username`;
@@ -54,7 +51,6 @@ exports.getOperators = async (req, res) => {
   }
 };
 
-// Fetch from Users table where role = 'supervisor'
 exports.getSupervisors = async (req, res) => {
   try {
     const result = await sql.query`SELECT id, username as supervisorName FROM Users WHERE role = 'supervisor' ORDER BY username`;
@@ -106,6 +102,40 @@ exports.getLastMouldCounter = async (req, res) => {
 };
 
 // ==========================================
+//        SUPERVISOR DASHBOARD APIS
+// ==========================================
+exports.getReportsBySupervisor = async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await sql.query`
+      SELECT id, reportDate, shift, disa, incharge, ppOperator, supervisorSignature 
+      FROM DisamaticProductReport 
+      WHERE supervisorName = ${name}
+      ORDER BY reportDate DESC, id DESC
+    `;
+    res.json(result.recordset);
+  } catch (error) {
+    console.error("Error fetching supervisor reports:", error);
+    res.status(500).json({ error: "Failed to fetch reports" });
+  }
+};
+
+exports.signReport = async (req, res) => {
+  try {
+    const { reportId, signature } = req.body;
+    await sql.query`
+      UPDATE DisamaticProductReport 
+      SET supervisorSignature = ${signature} 
+      WHERE id = ${reportId}
+    `;
+    res.json({ message: "Signature saved successfully" });
+  } catch (error) {
+    console.error("Error saving signature:", error);
+    res.status(500).json({ error: "Failed to save signature" });
+  }
+};
+
+// ==========================================
 //            FORM SUBMISSION
 // ==========================================
 exports.createReport = async (req, res) => {
@@ -133,7 +163,6 @@ exports.createReport = async (req, res) => {
     const reportId = reportResult.recordset[0].id;
 
     if (productions.length > 0) {
-      
       const firstProduced = Number(productions[0].produced);
       
       await sql.query`
@@ -149,10 +178,7 @@ exports.createReport = async (req, res) => {
 
       for (let i = 0; i < productions.length; i++) {
         const p = productions[i];
-        
-        const producedValue = (i === productions.length - 1) 
-          ? null 
-          : Number(productions[i + 1].produced);
+        const producedValue = (i === productions.length - 1) ? null : Number(productions[i + 1].produced);
 
         await sql.query`
           INSERT INTO DisamaticProduction (
@@ -250,10 +276,23 @@ exports.createReport = async (req, res) => {
 // ==========================================
 exports.downloadAllReports = async (req, res) => {
   try {
-    const reportResult = await sql.query`
-      SELECT * FROM DisamaticProductReport 
-      ORDER BY reportDate DESC, shift ASC, disa ASC, id ASC
-    `;
+    const { reportId } = req.query; // Check if a specific ID was requested
+
+    let reportResult;
+    if (reportId) {
+      // Fetch only the specific report for the supervisor modal
+      reportResult = await sql.query`
+        SELECT * FROM DisamaticProductReport 
+        WHERE id = ${reportId}
+      `;
+    } else {
+      // Default: Fetch all reports
+      reportResult = await sql.query`
+        SELECT * FROM DisamaticProductReport 
+        ORDER BY reportDate DESC, shift ASC, disa ASC, id ASC
+      `;
+    }
+
     const reports = reportResult.recordset;
 
     if (reports.length === 0) {
@@ -274,6 +313,7 @@ exports.downloadAllReports = async (req, res) => {
           member: r.member,
           ppOperator: r.ppOperator,
           supervisorName: r.supervisorName,
+          supervisorSignature: r.supervisorSignature, // Captured signature here
           reportIds: [],
           sigEvents: new Set(),
           maintenances: new Set()
@@ -285,6 +325,7 @@ exports.downloadAllReports = async (req, res) => {
       grouped[key].member = r.member || grouped[key].member;
       grouped[key].ppOperator = r.ppOperator || grouped[key].ppOperator;
       grouped[key].supervisorName = r.supervisorName || grouped[key].supervisorName;
+      grouped[key].supervisorSignature = r.supervisorSignature || grouped[key].supervisorSignature;
       
       if (r.significantEvent && r.significantEvent.trim()) grouped[key].sigEvents.add(r.significantEvent);
       if (r.maintenance && r.maintenance.trim()) grouped[key].maintenances.add(r.maintenance);
@@ -294,7 +335,7 @@ exports.downloadAllReports = async (req, res) => {
 
     const doc = new PDFDocument({ margin: 30, size: 'A4', bufferPages: true });
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="Disamatic_Report_Full.pdf"`);
+    res.setHeader("Content-Disposition", `inline; filename="Disamatic_Report.pdf"`);
     doc.pipe(res);
 
     const startX = 30;
@@ -627,9 +668,31 @@ exports.downloadAllReports = async (req, res) => {
       doc.font('Helvetica').fontSize(9).text(maintText, startX + 5, currentY + 15, { width: tableWidth - 10 });
       currentY += 40;
 
-      doc.rect(startX, currentY, tableWidth, 20).stroke();
-      doc.font('Helvetica-Bold').text(`Supervisor Name : ${g.supervisorName || "-"}`, startX + 330, currentY + 5);
-      doc.fontSize(7).font('Helvetica').text("QF/07/FBP-03, Rev.No: 02 dt 01.10.2024", startX, currentY + 25);
+      // --- UPDATED FOOTER TO SHOW SUPERVISOR SIGNATURE ---
+      // --- UPDATED FOOTER TO SHOW SUPERVISOR SIGNATURE STACKED ---
+      const footerHeight = 50; // Increased height to fit stacked text
+      doc.rect(startX, currentY, tableWidth, footerHeight).stroke(); 
+      
+      // 1. Draw Supervisor Name on the first line
+      doc.font('Helvetica-Bold').fontSize(9).text(`Supervisor Name : ${g.supervisorName || "-"}`, startX + 330, currentY + 10);
+      
+      // 2. Draw "Signature :" label directly below the name
+      doc.text("Signature :", startX + 330, currentY + 30);
+      
+      // 3. Draw Signature Image next to the "Signature :" label
+      if (g.supervisorSignature && g.supervisorSignature.startsWith("data:image")) {
+        try {
+          // We set Y to currentY + 15 so the image aligns nicely with the text
+          doc.image(g.supervisorSignature, startX + 385, currentY + 15, { fit: [100, 30], align: 'left', valign: 'center' });
+        } catch (imgErr) {
+          doc.text("Signed", startX + 390, currentY + 30);
+        }
+      } else {
+        doc.text("Pending", startX + 390, currentY + 30);
+      }
+
+      // Move the document control text down slightly to fit the taller footer
+      doc.fontSize(7).font('Helvetica').text("QF/07/FBP-03, Rev.No: 02 dt 01.10.2024", startX + 5, currentY + 35);
     }
     
     doc.end();

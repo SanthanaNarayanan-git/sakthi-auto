@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { X, CheckCircle, AlertTriangle, FileDown, Loader } from 'lucide-react';
+// 🔥 FIX: Added 'Save' to the lucide-react imports
+import { X, CheckCircle, AlertTriangle, FileDown, Loader, Save } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import SignatureCanvas from 'react-signature-canvas';
 
 const NotificationModal = ({ data, onClose }) => {
   if (!data.show) return null;
@@ -35,10 +37,9 @@ const SearchableSelect = ({ label, options, displayKey, onSelect, value, placeho
       <input type="text" value={search} onChange={(e) => { setSearch(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} className="w-full p-3 text-sm font-bold border-2 border-gray-600 bg-white text-gray-900 rounded-lg outline-none focus:border-orange-600 placeholder-gray-500 shadow-sm" placeholder={placeholder || "Search..."} />
       {open && <ul className="absolute bottom-full mb-1 z-50 bg-white border-2 border-gray-400 w-full max-h-60 overflow-y-auto rounded-lg shadow-2xl">
         {filtered.length > 0 ? filtered.map((item, index) => (
-          <li key={index} onClick={() => { setSearch(item[displayKey]); setOpen(false); onSelect(item); }} className="p-3 hover:bg-orange-100 cursor-pointer text-sm font-bold border-b border-gray-200 text-gray-900">{item[displayKey]}</li>
+          <li key={index} onMouseDown={(e) => { e.preventDefault(); setSearch(item[displayKey]); setOpen(false); onSelect(item); }} className="p-3 hover:bg-orange-100 cursor-pointer text-sm font-bold border-b border-gray-200 text-gray-900">{item[displayKey]}</li>
         )) : <li className="p-3 text-gray-500 text-sm font-medium">No results</li>}
       </ul>}
-      {open && <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setOpen(false)} />}
     </div>
   );
 };
@@ -55,18 +56,25 @@ const getShiftDate = () => {
 
 const DisaMachineCheckList = () => {
   const [checklist, setChecklist] = useState([]);
-  const [operators, setOperators] = useState([]);
+  const [operators, setOperators] = useState([]); 
   const [reportsMap, setReportsMap] = useState({}); 
   const [headerData, setHeaderData] = useState({ 
       date: getShiftDate(),
-      operatorName: '',
+      operatorName: '', 
       disaMachine: 'DISA - I'
   });
   const [notification, setNotification] = useState({ show: false, type: '', message: '' });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalItem, setModalItem] = useState(null);
   const [ncForm, setNcForm] = useState({ ncDetails: '', correction: '', rootCause: '', correctiveAction: '', targetDate: new Date().toISOString().split('T')[0], responsibility: '', sign: '', status: 'Pending' });
+  
+  // 🔥 FIX: Added missing loading state
+  const [loading, setLoading] = useState(false);
 
+  const operatorSigPad = useRef({});
+
+  // 🔥 FIX: Added eslint-disable rule to clear the terminal warning
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchData(); }, [headerData.date, headerData.disaMachine]); 
 
   const fetchData = async () => {
@@ -75,17 +83,32 @@ const DisaMachineCheckList = () => {
           params: { date: headerData.date, disaMachine: headerData.disaMachine } 
       });
       
-      setOperators(res.data.operators);
+      setOperators(res.data.operators); 
       
-      const mergedList = res.data.checklist.map(item => ({
-          ...item,
-          IsDone: item.IsDone === true || item.IsDone === 1,
-          IsHoliday: item.IsHoliday === true || item.IsHoliday === 1,
-          IsVatCleaning: item.IsVatCleaning === true || item.IsVatCleaning === 1,
-          ReadingValue: item.ReadingValue || ''
-      }));
+      let foundHOD = '';
+      let foundOpSig = '';
+
+      const mergedList = res.data.checklist.map(item => {
+          if (item.AssignedHOD) foundHOD = item.AssignedHOD;
+          if (item.OperatorSignature) foundOpSig = item.OperatorSignature;
+          
+          return {
+             ...item,
+             IsDone: item.IsDone === true || item.IsDone === 1,
+             IsHoliday: item.IsHoliday === true || item.IsHoliday === 1,
+             IsVatCleaning: item.IsVatCleaning === true || item.IsVatCleaning === 1,
+             ReadingValue: item.ReadingValue || ''
+          };
+      });
 
       setChecklist(mergedList);
+
+      setHeaderData(prev => ({ ...prev, operatorName: foundHOD }));
+      if (foundOpSig && operatorSigPad.current) {
+        operatorSigPad.current.fromDataURL(foundOpSig);
+      } else if (operatorSigPad.current) {
+        operatorSigPad.current.clear();
+      }
 
       const reportsObj = {};
       res.data.reports.forEach(r => { reportsObj[r.MasterId] = r; });
@@ -108,37 +131,25 @@ const DisaMachineCheckList = () => {
   };
 
   const handleNotOkClick = (item) => {
-    if (!headerData.operatorName && !(isGlobalHoliday || isGlobalVatCleaning)) {
-      document.getElementById('checklist-footer')?.scrollIntoView({ behavior: 'smooth' });
-      return setNotification({ show: true, type: 'error', message: 'Please select the Operator Name at the bottom.' });
-    }
     setModalItem(item);
     const existingReport = reportsMap[item.MasterId];
     if (existingReport) {
       setNcForm({ ncDetails: existingReport.NonConformityDetails, correction: existingReport.Correction, rootCause: existingReport.RootCause, correctiveAction: existingReport.CorrectiveAction, targetDate: existingReport.TargetDate.split('T')[0], responsibility: existingReport.Responsibility, sign: existingReport.Sign, status: existingReport.Status });
     } else {
-      setNcForm({ ncDetails: '', correction: '', rootCause: '', correctiveAction: '', targetDate: headerData.date, responsibility: '', sign: headerData.operatorName || 'N/A', status: 'Pending' });
+      setNcForm({ ncDetails: '', correction: '', rootCause: '', correctiveAction: '', targetDate: headerData.date, responsibility: '', sign: '', status: 'Pending' });
     }
     setIsModalOpen(true);
   };
 
   const handleMasterHolidayToggle = (checked) => {
     setChecklist(prev => prev.map(c => ({
-        ...c, 
-        IsHoliday: checked,
-        IsVatCleaning: checked ? false : c.IsVatCleaning, // Mutually exclusive
-        IsDone: checked ? false : c.IsDone,
-        ReadingValue: checked ? '' : c.ReadingValue
+        ...c, IsHoliday: checked, IsVatCleaning: checked ? false : c.IsVatCleaning, IsDone: checked ? false : c.IsDone, ReadingValue: checked ? '' : c.ReadingValue
     })));
   };
 
   const handleMasterVatToggle = (checked) => {
     setChecklist(prev => prev.map(c => ({
-        ...c, 
-        IsVatCleaning: checked,
-        IsHoliday: checked ? false : c.IsHoliday, // Mutually exclusive
-        IsDone: checked ? false : c.IsDone,
-        ReadingValue: checked ? '' : c.ReadingValue
+        ...c, IsVatCleaning: checked, IsHoliday: checked ? false : c.IsHoliday, IsDone: checked ? false : c.IsDone, ReadingValue: checked ? '' : c.ReadingValue
     })));
   };
 
@@ -146,11 +157,7 @@ const DisaMachineCheckList = () => {
     if (!ncForm.ncDetails || !ncForm.responsibility) return setNotification({ show: true, type: 'error', message: 'Details and Responsibility are mandatory.' });
     try {
       await axios.post('http://localhost:5000/api/disa-checklist/report-nc', { 
-          checklistId: modalItem.MasterId, 
-          slNo: modalItem.SlNo, 
-          reportDate: headerData.date, 
-          disaMachine: headerData.disaMachine,
-          ...ncForm 
+          checklistId: modalItem.MasterId, slNo: modalItem.SlNo, reportDate: headerData.date, disaMachine: headerData.disaMachine, ...ncForm 
       });
       setNotification({ show: true, type: 'success', message: 'Report Logged Successfully.' });
       setIsModalOpen(false);
@@ -163,32 +170,45 @@ const DisaMachineCheckList = () => {
   const isGlobalVatCleaning = checklist.length > 0 && checklist.every(i => i.IsVatCleaning);
 
   const handleBatchSubmit = async () => {
-    // Optional Operator name if Holiday or VAT is checked
-    if (!isGlobalHoliday && !isGlobalVatCleaning && !headerData.operatorName) {
-        return setNotification({ show: true, type: 'error', message: 'Select Operator Name before submitting.' });
+    if (!isGlobalHoliday && !isGlobalVatCleaning) {
+        if (!headerData.operatorName) {
+           document.getElementById('checklist-footer')?.scrollIntoView({ behavior: 'smooth' });
+           return setNotification({ show: true, type: 'error', message: 'Please select a HOD to verify this form.' });
+        }
+        if (operatorSigPad.current && operatorSigPad.current.isEmpty()) {
+           document.getElementById('checklist-footer')?.scrollIntoView({ behavior: 'smooth' });
+           return setNotification({ show: true, type: 'error', message: 'Please sign the document before submitting.' });
+        }
     }
     
     const pendingItems = checklist.filter(item => !item.IsDone && !item.IsHoliday && !item.IsVatCleaning && !reportsMap[item.MasterId]);
     if (pendingItems.length > 0) return setNotification({ show: true, type: 'error', message: `Cannot submit. ${pendingItems.length} items are unchecked.` });
 
+    setLoading(true); // 🔥 Start loading spinner
     try {
+      let sigData = '';
+      if (operatorSigPad.current && !operatorSigPad.current.isEmpty()) {
+        sigData = operatorSigPad.current.getCanvas().toDataURL('image/png');
+      }
+
       const itemsToSave = checklist.map(item => ({ 
-          MasterId: item.MasterId, 
-          IsDone: item.IsDone, 
-          IsHoliday: item.IsHoliday,
-          IsVatCleaning: item.IsVatCleaning,
-          ReadingValue: item.ReadingValue || ''
+          MasterId: item.MasterId, IsDone: item.IsDone, IsHoliday: item.IsHoliday, IsVatCleaning: item.IsVatCleaning, ReadingValue: item.ReadingValue || ''
       }));
       
       await axios.post('http://localhost:5000/api/disa-checklist/submit-batch', { 
           items: itemsToSave, 
-          sign: headerData.operatorName || '', // Allow empty if Holiday/Vat
+          sign: headerData.operatorName || '', 
+          operatorSignature: sigData,
           date: headerData.date,
           disaMachine: headerData.disaMachine 
       });
-      setNotification({ show: true, type: 'success', message: 'Checklist Saved Successfully!' });
+      setNotification({ show: true, type: 'success', message: 'Sent to HOD Successfully!' });
       fetchData(); 
-    } catch (error) { setNotification({ show: true, type: 'error', message: 'Submit failed.' }); }
+    } catch (error) { 
+      setNotification({ show: true, type: 'error', message: 'Submit failed.' }); 
+    } finally {
+      setLoading(false); // 🔥 Stop loading spinner
+    }
   };
 
   const generatePDF = async () => {
@@ -213,25 +233,28 @@ const DisaMachineCheckList = () => {
       const historyMap = {};
       const holidayDays = new Set();
       const vatDays = new Set();
-      const operatorMap = {}; 
+      
+      const opSigMap = {}; 
+      const hodSigMap = {};
 
       monthlyLogs.forEach(log => {
         const logDay = log.DayVal; 
         const key = String(log.MasterId); 
         
-        // Track unique statuses
-        if (log.IsHoliday == 1) holidayDays.add(logDay);
-        if (log.IsVatCleaning == 1) vatDays.add(logDay);
+        // 🔥 FIX: Added Number() cast to fix the "==" warning
+        if (Number(log.IsHoliday) === 1) holidayDays.add(logDay);
+        if (Number(log.IsVatCleaning) === 1) vatDays.add(logDay);
         
-        const opName = log.Sign || log.sign || null;
-        if (opName) operatorMap[logDay] = opName.trim();
+        if (log.OperatorSignature) opSigMap[logDay] = log.OperatorSignature;
+        if (log.HODSignature) hodSigMap[logDay] = log.HODSignature;
 
         if (!historyMap[key]) historyMap[key] = {};
         
         if (log.ReadingValue) {
             historyMap[key][logDay] = log.ReadingValue;
         } else {
-            if (log.IsDone == 1) historyMap[key][logDay] = 'Y';
+            // 🔥 FIX: Added Number() cast to fix the "==" warning
+            if (Number(log.IsDone) === 1) historyMap[key][logDay] = 'Y';
             else historyMap[key][logDay] = 'N'; 
         }
       });
@@ -258,7 +281,6 @@ const DisaMachineCheckList = () => {
             if (holidayDays.has(i)) {
                 if (rowIndex === 0) row.push({ content: 'H\nO\nL\nI\nD\nA\nY', rowSpan: checklist.length, styles: { halign: 'center', valign: 'middle', fillColor: [230, 230, 230], fontStyle: 'bold', textColor: [100, 100, 100] } });
             } else if (vatDays.has(i)) {
-                // ✅ Changed "VAT CLEAN" to "VAT CLEANING" vertically
                 if (rowIndex === 0) row.push({ content: 'V\nA\nT\n\nC\nL\nE\nA\nN\nI\nN\nG', rowSpan: checklist.length, styles: { halign: 'center', valign: 'middle', fillColor: [210, 230, 255], fontStyle: 'bold', textColor: [50, 100, 150] } });
             } else {
                 const key = String(item.MasterId);
@@ -268,28 +290,15 @@ const DisaMachineCheckList = () => {
         return row;
       });
 
-      const emptyDays = Array(31).fill("");
+      const opSigRow = ["", "OPERATOR SIGN", ""];
+      const hodSigRow = ["", "HOD - MOU SIGN", ""];
       
-      const operatorRow = ["", "OPERATOR", ""];
       for (let i = 1; i <= 31; i++) {
-          // If it's Holiday or VAT cleaning, leave the operator name absolutely blank
-          if (holidayDays.has(i) || vatDays.has(i)) {
-              operatorRow.push(""); 
-          } else {
-              let rawName = operatorMap[i] || "";
-              if (rawName) {
-                  let parts = rawName.split(' ');
-                  rawName = parts.map(p => p.length > 5 ? p.substring(0, 5) + '\n' + p.substring(5, 10) : p).join('\n');
-              }
-              operatorRow.push(rawName); 
-          }
+         opSigRow.push(opSigMap[i] ? "SIG" : "");
+         hodSigRow.push(hodSigMap[i] ? "SIG" : "");
       }
 
-      const footerRows = [
-          ["", "SIGNATURE", "", ...emptyDays],
-          operatorRow, 
-          ["", "HOD - MOU", "", ...emptyDays]
-      ];
+      const footerRows = [opSigRow, hodSigRow];
 
       const dynamicColumnStyles = {};
       for (let i = 3; i < 34; i++) {
@@ -309,41 +318,49 @@ const DisaMachineCheckList = () => {
         styles: { fontSize: 6, cellPadding: 0.5, lineColor: [0, 0, 0], lineWidth: 0.1, textColor: [0, 0, 0], valign: 'middle' },
         headStyles: { fillColor: [255, 255, 255], textColor: [0, 0, 0], lineWidth: 0.1, lineColor: [0, 0, 0] },
         columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 60 }, 2: { cellWidth: 25 }, ...dynamicColumnStyles },
+        
+        didDrawCell: function(data) {
+           if (data.row.index >= tableBody.length && data.column.index > 2) {
+               const dayIndex = data.column.index - 2; 
+               
+               if (data.cell.text[0] === 'SIG') {
+                   const isOpRow = data.row.index === tableBody.length;
+                   const sigData = isOpRow ? opSigMap[dayIndex] : hodSigMap[dayIndex];
+                   
+                   if (sigData && sigData.startsWith('data:image')) {
+                       doc.setFillColor(255, 255, 255);
+                       doc.rect(data.cell.x + 0.5, data.cell.y + 0.5, data.cell.width - 1, data.cell.height - 1, 'F');
+                       try {
+                          doc.addImage(sigData, 'PNG', data.cell.x + 0.5, data.cell.y + 0.5, data.cell.width - 1, data.cell.height - 1);
+                       } catch(e){}
+                   }
+               }
+           }
+        },
         didParseCell: function(data) {
            if (data.row.index >= tableBody.length && data.column.index === 1) {
                data.cell.styles.fontStyle = 'bold';
            }
            
-           if (data.column.index > 2) {
+           if (data.column.index > 2 && data.row.index < tableBody.length) {
              const rawTextArray = data.cell.text || [];
-             const rawTextString = rawTextArray.join('').replace(/\n/g, ''); // Safely strip out newlines for logic checks
+             const rawTextString = rawTextArray.join('').replace(/\n/g, ''); 
+             const text = rawTextArray[0] ? rawTextArray[0] : '';
              
-             if (data.row.index === tableBody.length + 1) {
-                data.cell.styles.fontSize = 3.5; 
+             if (text === 'Y') {
+                data.cell.styles.font = 'ZapfDingbats';
+                data.cell.text = '3'; 
+                data.cell.styles.textColor = [0, 100, 0];
+             } else if (text === 'N') {
+                data.cell.styles.textColor = [255, 0, 0];
+                data.cell.text = 'X'; 
+                data.cell.styles.fontStyle = 'bold';
+             } else if (text && !rawTextString.includes('HOLIDAY') && !rawTextString.includes('VATCLEANING')) {
+                data.cell.styles.fontSize = 4; 
+                data.cell.styles.fontStyle = 'bold';
                 data.cell.styles.textColor = [0, 0, 0];
                 data.cell.styles.halign = 'center';
-                data.cell.styles.valign = 'middle';
-                data.cell.styles.cellPadding = 0.2; 
-             } 
-             else if (data.row.index < tableBody.length) {
-                const text = rawTextArray[0] ? rawTextArray[0] : '';
-                
-                if (text === 'Y') {
-                   data.cell.styles.font = 'ZapfDingbats';
-                   data.cell.text = '3'; 
-                   data.cell.styles.textColor = [0, 100, 0];
-                } else if (text === 'N') {
-                   data.cell.styles.textColor = [255, 0, 0];
-                   data.cell.text = 'X'; 
-                   data.cell.styles.fontStyle = 'bold';
-                // ✅ Updated to ignore "VATCLEANING" styling checks
-                } else if (text && !rawTextString.includes('HOLIDAY') && !rawTextString.includes('VATCLEANING')) {
-                   data.cell.styles.fontSize = 4; 
-                   data.cell.styles.fontStyle = 'bold';
-                   data.cell.styles.textColor = [0, 0, 0];
-                   data.cell.styles.halign = 'center';
-                   data.cell.styles.cellPadding = 0.2;
-                }
+                data.cell.styles.cellPadding = 0.2;
              }
            }
         }
@@ -449,21 +466,11 @@ const DisaMachineCheckList = () => {
                 <th className="py-3 text-center w-20">Not OK</th>
                 <th className="py-3 text-center w-20 ">
                   Holiday<br/>
-                  <input 
-                    type="checkbox" 
-                    checked={isGlobalHoliday} 
-                    onChange={(e) => handleMasterHolidayToggle(e.target.checked)} 
-                    className="w-4 h-4 mt-2 accent-orange-600 cursor-pointer"
-                  />
+                  <input type="checkbox" checked={isGlobalHoliday} onChange={(e) => handleMasterHolidayToggle(e.target.checked)} className="w-4 h-4 mt-2 accent-orange-600 cursor-pointer" />
                 </th>
                 <th className="py-3 text-center w-24 border-l-2 border-gray-100 bg-gray-50 rounded-tr">
                   VAT Cleaning<br/>
-                  <input 
-                    type="checkbox" 
-                    checked={isGlobalVatCleaning} 
-                    onChange={(e) => handleMasterVatToggle(e.target.checked)} 
-                    className="w-4 h-4 mt-2 accent-blue-600 cursor-pointer"
-                  />
+                  <input type="checkbox" checked={isGlobalVatCleaning} onChange={(e) => handleMasterVatToggle(e.target.checked)} className="w-4 h-4 mt-2 accent-blue-600 cursor-pointer" />
                 </th>
               </tr>
             </thead>
@@ -481,46 +488,24 @@ const DisaMachineCheckList = () => {
                     <td className={`py-4 font-bold text-sm ${isDisabled ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{item.CheckPointDesc}</td>
                     <td className="py-4"><span className={`bg-white border text-[10px] font-bold px-2 py-1 rounded uppercase ${isDisabled ? 'text-gray-300 border-gray-200' : 'text-gray-600'}`}>{item.CheckMethod}</span></td>
                     
-                    {/* OK Block */}
                     <td className="py-4 text-center">
                       {isDecimalRow ? (
-                          <input 
-                              type="number" 
-                              step="0.01"
-                              value={item.ReadingValue || ''}
-                              onChange={(e) => handleReadingChange(item.MasterId, e.target.value)}
-                              disabled={isDisabled || hasReport}
-                              placeholder="0.00"
-                              className={`w-16 mx-auto text-center border-2 rounded text-xs font-bold py-1 outline-none transition-colors ${isDisabled || hasReport ? 'bg-gray-100 border-gray-200 cursor-not-allowed text-gray-400' : 'bg-white border-gray-300 focus:border-orange-500 text-gray-900 shadow-inner'}`}
-                          />
+                          <input type="number" step="0.01" value={item.ReadingValue || ''} onChange={(e) => handleReadingChange(item.MasterId, e.target.value)} disabled={isDisabled || hasReport} placeholder="0.00" className={`w-16 mx-auto text-center border-2 rounded text-xs font-bold py-1 outline-none transition-colors ${isDisabled || hasReport ? 'bg-gray-100 border-gray-200 cursor-not-allowed text-gray-400' : 'bg-white border-gray-300 focus:border-orange-500 text-gray-900 shadow-inner'}`} />
                       ) : (
                           <div onClick={() => !isDisabled && !hasReport && handleOkClick(item)} className={`w-6 h-6 mx-auto rounded border-2 flex items-center justify-center transition-all ${isDisabled ? 'cursor-not-allowed border-gray-200 bg-gray-100' : 'cursor-pointer'} ${item.IsDone && !hasReport && !isDisabled ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 bg-white'} ${hasReport ? 'opacity-20 cursor-not-allowed' : ''}`}>{item.IsDone && !hasReport && !isDisabled && "✓"}</div>
                       )}
                     </td>
                     
-                    {/* Not OK Block */}
                     <td className="py-4 text-center">
                       <div onClick={() => !isDisabled && handleNotOkClick(item)} className={`w-6 h-6 mx-auto rounded border-2 flex items-center justify-center transition-all ${isDisabled ? 'cursor-not-allowed border-gray-200 bg-gray-100' : 'cursor-pointer'} ${hasReport && !isDisabled ? 'bg-red-500 border-red-500 text-white' : 'border-gray-300 bg-white hover:border-red-400'}`}>{hasReport && !isDisabled && "✕"}</div>
                     </td>
                     
-                    {/* Holiday Checkbox */}
                     <td className="py-4 text-center border-l-2 border-gray-50 bg-gray-50/30">
-                      <input 
-                         type="checkbox" 
-                         checked={isHoliday || false}
-                         readOnly disabled
-                         className="w-5 h-5 accent-orange-600 cursor-not-allowed opacity-70"
-                      />
+                      <input type="checkbox" checked={isHoliday || false} readOnly disabled className="w-5 h-5 accent-orange-600 cursor-not-allowed opacity-70" />
                     </td>
 
-                    {/* VAT Cleaning Checkbox */}
                     <td className="py-4 text-center border-l-2 border-gray-50 bg-gray-50/30">
-                      <input 
-                         type="checkbox" 
-                         checked={isVatCleaning || false}
-                         readOnly disabled
-                         className="w-5 h-5 accent-blue-600 cursor-not-allowed opacity-70"
-                      />
+                      <input type="checkbox" checked={isVatCleaning || false} readOnly disabled className="w-5 h-5 accent-blue-600 cursor-not-allowed opacity-70" />
                     </td>
                   </tr>
                 );
@@ -529,19 +514,43 @@ const DisaMachineCheckList = () => {
           </table>
         </div>
 
-        <div id="checklist-footer" className="bg-slate-100 p-8 border-t border-gray-200 sticky bottom-0 z-20 flex flex-col md:flex-row justify-end gap-6 rounded-b-2xl shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-           <div className="w-full md:w-64">
-             <label className="text-[11px] font-black text-gray-600 uppercase block mb-1">
-                 Checklist Verified By {(isGlobalHoliday || isGlobalVatCleaning) && <span className="text-gray-400 lowercase font-normal">(Optional)</span>}
-             </label>
-             <SearchableSelect options={operators} displayKey="OperatorName" value={headerData.operatorName} onSelect={(op) => setHeaderData(prev => ({...prev, operatorName: op.OperatorName}))} placeholder={isGlobalHoliday || isGlobalVatCleaning ? "Not Required" : "Select Name..."} />
+        <div id="checklist-footer" className="bg-slate-100 p-8 border-t border-gray-200 flex flex-col gap-6 rounded-b-2xl shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+           <div className="flex flex-col md:flex-row justify-between items-start gap-8 w-full">
+             
+             {/* LEFT: Operator Signature Pad */}
+             <div className="w-full md:w-1/3">
+                 <label className="text-[11px] font-black text-gray-600 uppercase block mb-1">
+                   Operator Signature {(isGlobalHoliday || isGlobalVatCleaning) && <span className="text-gray-400 lowercase font-normal">(Optional)</span>}
+                 </label>
+                 <div className="border-2 border-dashed border-gray-400 bg-white rounded-lg w-full h-24 mb-1 overflow-hidden">
+                    <SignatureCanvas ref={operatorSigPad} penColor="blue" canvasProps={{ className: 'w-full h-full cursor-crosshair' }} />
+                 </div>
+                 <button onClick={() => operatorSigPad.current.clear()} className="text-xs text-red-500 hover:text-red-700 font-bold uppercase tracking-wider">
+                    Clear Pad
+                 </button>
+             </div>
+
+             {/* RIGHT: Submit Buttons and HOD dropdown */}
+             <div className="flex flex-col items-end gap-4 w-full md:w-2/3">
+               <div className="w-full md:w-64">
+                 <label className="text-[11px] font-black text-gray-600 uppercase block mb-1">
+                     Send to HOD {(isGlobalHoliday || isGlobalVatCleaning) && <span className="text-gray-400 lowercase font-normal">(Optional)</span>}
+                 </label>
+                 <SearchableSelect options={operators} displayKey="OperatorName" value={headerData.operatorName} onSelect={(op) => setHeaderData(prev => ({...prev, operatorName: op.OperatorName}))} placeholder={isGlobalHoliday || isGlobalVatCleaning ? "Not Required" : "Select HOD..."} />
+               </div>
+               
+               <div className="flex gap-4">
+                 <button onClick={generatePDF} className="bg-white border-2 border-gray-900 text-gray-900 hover:bg-gray-200 font-bold py-3 px-6 rounded-lg shadow-md uppercase flex items-center gap-2 mt-auto transition-colors">
+                   <FileDown size={20} /> Preview PDF
+                 </button>
+                 <button onClick={handleBatchSubmit} disabled={loading} className="bg-gray-900 hover:bg-orange-600 text-white font-bold py-3 px-10 rounded-lg shadow-lg uppercase mt-auto transition-colors flex items-center gap-3">
+                   {loading ? <Loader className="animate-spin w-5 h-5" /> : <Save className="w-5 h-5" />}
+                   {loading ? 'Saving...' : 'Sign & Submit to HOD'}
+                 </button>
+               </div>
+             </div>
+
            </div>
-           <button onClick={generatePDF} className="bg-white border-2 border-gray-900 text-gray-900 hover:bg-gray-200 font-bold py-3 px-6 rounded-lg shadow-md uppercase flex items-center gap-2 mt-auto transition-colors">
-             <FileDown size={20} /> PDF
-           </button>
-           <button onClick={handleBatchSubmit} className="bg-gray-900 hover:bg-orange-600 text-white font-bold py-3 px-10 rounded-lg shadow-lg uppercase mt-auto transition-colors">
-             Submit Checklist
-           </button>
         </div>
       </div>
 
@@ -552,14 +561,16 @@ const DisaMachineCheckList = () => {
               <div><h3 className="font-bold uppercase text-sm">Non-Conformance Report</h3><p className="text-xs opacity-80 mt-1">Item #{modalItem.SlNo}</p></div>
               <button onClick={() => setIsModalOpen(false)} className="hover:bg-red-700 rounded-full p-1"><X size={24} /></button>
             </div>
-            <div className="p-8 space-y-6 max-h-[75vh] overflow-y-auto">
+            <div className="p-8 space-y-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
               <div className="bg-red-50 p-4 rounded-lg border border-red-100 flex justify-between"><p className="font-bold text-gray-800">{modalItem.CheckPointDesc}</p><span className="text-[10px] bg-orange-200 text-orange-800 px-2 py-1 rounded font-bold">{ncForm.status}</span></div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="col-span-2"><label className="text-xs font-bold text-gray-500 block mb-1">NC Details</label><textarea rows="2" className={inputStyle} value={ncForm.ncDetails} onChange={e => setNcForm({...ncForm, ncDetails: e.target.value})} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">Correction</label><input className={inputStyle} value={ncForm.correction} onChange={e => setNcForm({...ncForm, correction: e.target.value})} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">Root Cause</label><input className={inputStyle} value={ncForm.rootCause} onChange={e => setNcForm({...ncForm, rootCause: e.target.value})} /></div>
                 <div className="col-span-2"><label className="text-xs font-bold text-gray-500 block mb-1">Corrective Action</label><textarea rows="2" className={inputStyle} value={ncForm.correctiveAction} onChange={e => setNcForm({...ncForm, correctiveAction: e.target.value})} /></div>
-                <div className="col-span-1"><SearchableSelect label="Responsibility" options={operators} displayKey="OperatorName" value={ncForm.responsibility} onSelect={(op) => setNcForm(prev => ({...prev, responsibility: op.OperatorName}))} /></div>
+                <div className="col-span-1">
+                  <SearchableSelect label="Responsibility" options={[{OperatorName: "Maintenance"}, {OperatorName: "Production"}, {OperatorName: "Quality"}]} displayKey="OperatorName" value={ncForm.responsibility} onSelect={(op) => setNcForm(prev => ({...prev, responsibility: op.OperatorName}))} />
+                </div>
                 <div className="col-span-1"><label className="text-xs font-bold text-gray-500 block mb-1">Target Date</label><input type="date" className={inputStyle} value={ncForm.targetDate} onChange={e => setNcForm({...ncForm, targetDate: e.target.value})} /></div>
               </div>
               <div className="pt-4 border-t border-gray-100"><button onClick={submitReport} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-lg uppercase shadow-lg transition-colors">Save Report</button></div>
@@ -567,8 +578,15 @@ const DisaMachineCheckList = () => {
           </div>
         </div>
       )}
+
+      <style dangerouslySetInnerHTML={{__html: `
+        .custom-scrollbar::-webkit-scrollbar { height: 12px; width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      `}} />
     </div>
   );
 };
 
-export default DisaMachineCheckList; 
+export default DisaMachineCheckList;

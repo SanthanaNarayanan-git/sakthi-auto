@@ -25,7 +25,7 @@ router.get("/last-mould-count", async (req, res) => {
 });
 
 /**
- * INSERT record
+ * INSERT record (Updated to include operatorSignature)
  */
 router.post("/add", async (req, res) => {
   const {
@@ -35,15 +35,16 @@ router.post("/add", async (req, res) => {
     noOfMoulds,
     workCarriedOut,
     preventiveWorkCarried,
+    operatorSignature, // 🔥 NEW FIELD
     remarks
   } = req.body;
 
   try {
     await sql.query`
       INSERT INTO DISASettingAdjustmentRecord (
-        recordDate, mouldCountNo, prevMouldCountNo, noOfMoulds, workCarriedOut, preventiveWorkCarried, remarks
+        recordDate, mouldCountNo, prevMouldCountNo, noOfMoulds, workCarriedOut, preventiveWorkCarried, operatorSignature, remarks
       ) VALUES (
-        ${recordDate}, ${mouldCountNo}, ${prevMouldCountNo}, ${noOfMoulds}, ${workCarriedOut}, ${preventiveWorkCarried}, ${remarks}
+        ${recordDate}, ${mouldCountNo}, ${prevMouldCountNo}, ${noOfMoulds}, ${workCarriedOut}, ${preventiveWorkCarried}, ${operatorSignature || null}, ${remarks}
       )
     `;
 
@@ -55,14 +56,10 @@ router.post("/add", async (req, res) => {
 });
 
 /**
- * GET PDF Report
+ * GET PDF Report (Updated to draw the signature)
  */
 router.get("/report", async (req, res) => {
   try {
-    // ---------------------------------------------------------
-    // CHANGED HERE: Added 'ORDER BY id DESC' to guarantee the 
-    // exact descending order of when they were added.
-    // ---------------------------------------------------------
     const result = await sql.query`
       SELECT 
         recordDate,
@@ -70,6 +67,7 @@ router.get("/report", async (req, res) => {
         noOfMoulds,
         workCarriedOut,
         preventiveWorkCarried,
+        operatorSignature, -- 🔥 Fetch the signature
         remarks
       FROM DISASettingAdjustmentRecord
       ORDER BY id DESC 
@@ -86,12 +84,13 @@ router.get("/report", async (req, res) => {
     const startY = 30;
     const pageWidth = doc.page.width - 60; 
     
-    const colWidths = [80, 110, 80, 200, 200, pageWidth - 670]; 
+    // 🔥 Adjusted column widths to make room for the new Signature column
+    const colWidths = [70, 90, 70, 180, 180, 100, pageWidth - 690]; 
     const logoBoxWidth = colWidths[0] + colWidths[1]; 
     const titleBoxWidth = pageWidth - logoBoxWidth;   
 
     const headerHeight = 60; 
-    const minRowHeight = 35;    
+    const minRowHeight = 45;    
 
     const headers = [
       "Date",
@@ -99,6 +98,7 @@ router.get("/report", async (req, res) => {
       "No. of Moulds",
       "Work Carried Out",
       "Preventive Work Carried",
+      "Operator Signature", // 🔥 NEW HEADER
       "Remarks"
     ];
 
@@ -159,10 +159,8 @@ router.get("/report", async (req, res) => {
     result.recordset.forEach((row) => {
       const formattedDate = new Date(row.recordDate).toLocaleDateString("en-GB");
 
-      // Set up row data and check for old records that used commas instead of bullets
       const processText = (text) => {
         if (!text) return "";
-        // Backwards compatibility: if old data has commas but no bullets, format it.
         if (text.includes(",") && !text.includes("•")) {
           return text.split(",").map(item => `• ${item.trim()}`).join("\n");
         }
@@ -175,24 +173,28 @@ router.get("/report", async (req, res) => {
         row.noOfMoulds,
         processText(row.workCarriedOut),
         processText(row.preventiveWorkCarried),
+        row.operatorSignature, // 🔥 Base64 String
         row.remarks
       ];
 
-      // 1. Calculate dynamic row height based on the text length (for multiple bullets)
+      // 1. Calculate dynamic row height
       let maxRowHeight = minRowHeight;
       doc.font("Helvetica").fontSize(10);
       
       rowData.forEach((cell, i) => {
+        // Skip height calculation for the signature image column
+        if (i === 5) return; 
+        
         const textHeight = doc.heightOfString(String(cell || ""), {
           width: colWidths[i] - 10,
           align: "center"
         });
-        if (textHeight + 20 > maxRowHeight) { // +20 for top/bottom padding
+        if (textHeight + 20 > maxRowHeight) { 
           maxRowHeight = textHeight + 20;
         }
       });
 
-      // 2. Check if row + footer exceeds page. If so, draw footer, add page, draw headers.
+      // 2. Check if row + footer exceeds page.
       if (y + maxRowHeight + 30 > doc.page.height - 30) {
         drawFooter(y);
         doc.addPage({ layout: "landscape", margin: 30 });
@@ -204,17 +206,35 @@ router.get("/report", async (req, res) => {
       let x = startX;
       rowData.forEach((cell, i) => {
         doc.rect(x, y, colWidths[i], maxRowHeight).stroke();
-        doc.text(String(cell || ""), x + 5, y + 10, {
-          width: colWidths[i] - 10,
-          align: "center" // Keep bullets centered per original layout
-        });
+        
+        // 🔥 If it's the signature column and it contains data, draw the image
+        if (i === 5 && cell && cell.startsWith("data:image")) {
+          try {
+            // Draw the base64 image inside the cell
+            doc.image(cell, x + 5, y + 5, {
+              fit: [colWidths[i] - 10, maxRowHeight - 10], // Fit inside cell padding
+              align: 'center',
+              valign: 'center'
+            });
+          } catch (imgErr) {
+            console.error("Could not draw signature image:", imgErr);
+            doc.text("Invalid Sig", x + 5, y + 10, { width: colWidths[i] - 10, align: "center" });
+          }
+        } 
+        // Otherwise, draw normal text
+        else if (i !== 5) {
+          doc.text(String(cell || ""), x + 5, y + 10, {
+            width: colWidths[i] - 10,
+            align: "center" 
+          });
+        }
+        
         x += colWidths[i];
       });
 
       y += maxRowHeight;
     });
 
-    // Draw footer at the very end of the final page
     drawFooter(y);
 
     doc.end();

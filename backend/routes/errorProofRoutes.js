@@ -3,39 +3,37 @@ const router = express.Router();
 const sql = require("mssql");
 const PDFDocument = require("pdfkit");
 
-/**
- * GET next S.No
- */
+// GET next S.No
 router.get("/next-sno", async (req, res) => {
   try {
+    // 🔥 FIXED: Reverted back to sNo (Matches your actual DB schema)
     const result = await sql.query`SELECT ISNULL(MAX(sNo), 0) + 1 AS nextSNo FROM ReactionPlan`;
     res.json({ nextSNo: result.recordset[0].nextSNo });
   } catch (err) {
+    console.error("Next SNo Error:", err);
     res.status(500).json({ message: "DB error" });
   }
 });
 
-/**
- * GET incharges
- */
+// GET Operators, Supervisors, HOFs from Users table
 router.get("/incharges", async (req, res) => {
   try {
-    const result = await sql.query`SELECT name FROM Incharge ORDER BY name ASC`;
-    res.json(result.recordset);
+    const ops = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'operator' ORDER BY username ASC`;
+    const sups = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'supervisor' ORDER BY username ASC`;
+    const hofs = await sql.query`SELECT username as name FROM dbo.Users WHERE role = 'hof' ORDER BY username ASC`;
+    res.json({ operators: ops.recordset, supervisors: sups.recordset, hofs: hofs.recordset });
   } catch (err) {
     res.status(500).json({ message: "DB error" });
   }
 });
 
-/**
- * INSERT Verification
- */
+// INSERT Verification
 router.post("/add-verification", async (req, res) => {
-  const { line, errorProofName, natureOfErrorProof, frequency, recordDate, shift, observationResult, verifiedBy, reviewedBy } = req.body;
+  const { line, errorProofName, natureOfErrorProof, frequency, recordDate, shift, observationResult, verifiedBy, reviewedBy, operatorSignature, assignedHOF } = req.body;
   try {
     await sql.query`
-      INSERT INTO ErrorProofVerification (line, errorProofName, natureOfErrorProof, frequency, recordDate, shift, observationResult, verifiedBy, reviewedBy)
-      VALUES (${line}, ${errorProofName}, ${natureOfErrorProof}, ${frequency}, ${recordDate}, ${shift}, ${observationResult}, ${verifiedBy}, ${reviewedBy})
+      INSERT INTO ErrorProofVerification (line, errorProofName, natureOfErrorProof, frequency, recordDate, shift, observationResult, verifiedBy, reviewedBy, OperatorSignature, AssignedHOF)
+      VALUES (${line}, ${errorProofName}, ${natureOfErrorProof}, ${frequency}, ${recordDate}, ${shift}, ${observationResult}, ${verifiedBy}, ${reviewedBy}, ${operatorSignature}, ${assignedHOF})
     `;
     res.json({ message: "Verification saved" });
   } catch (err) {
@@ -44,12 +42,11 @@ router.post("/add-verification", async (req, res) => {
   }
 });
 
-/**
- * INSERT Reaction Plan
- */
+// INSERT Reaction Plan
 router.post("/add-reaction", async (req, res) => {
   const { sNo, errorProofNo, errorProofName, recordDate, shift, problem, rootCause, correctiveAction, status, reviewedBy, approvedBy, remarks } = req.body;
   try {
+    // 🔥 FIXED: Restored sNo
     await sql.query`
       INSERT INTO ReactionPlan (sNo, errorProofNo, errorProofName, recordDate, shift, problem, rootCause, correctiveAction, status, reviewedBy, approvedBy, remarks)
       VALUES (${sNo}, ${errorProofNo}, ${errorProofName}, ${recordDate}, ${shift}, ${problem}, ${rootCause}, ${correctiveAction}, ${status}, ${reviewedBy}, ${approvedBy}, ${remarks})
@@ -61,15 +58,105 @@ router.post("/add-reaction", async (req, res) => {
   }
 });
 
-/**
- * GET PDF REPORT
- */
+// ==========================================
+//        SUPERVISOR DASHBOARD APIS 
+// ==========================================
+router.get("/supervisor/:name", async (req, res) => {
+    try {
+      const { name } = req.params;
+      // 🔥 FIXED: Restored sNo alias
+      const result = await sql.query`
+        SELECT 
+          r.sNo as VerificationId, 
+          r.errorProofName as ErrorProofName, 
+          r.status as Status, 
+          r.problem as Problem, 
+          r.correctiveAction as CorrectiveAction, 
+          r.recordDate, 
+          e.line as DisaMachine 
+        FROM ReactionPlan r
+        LEFT JOIN ErrorProofVerification e ON r.recordDate = e.recordDate AND r.errorProofName = e.errorProofName
+        WHERE r.approvedBy = ${name}
+        ORDER BY r.recordDate DESC
+      `;
+      res.json(result.recordset);
+    } catch (err) { 
+      console.error(err);
+      res.status(500).json({ message: "DB error" }); 
+    }
+});
+
+router.post("/sign-supervisor", async (req, res) => {
+    try {
+      const { verificationId, signature } = req.body;
+      // 🔥 FIXED: Targeting sNo column
+      await sql.query`
+        UPDATE ReactionPlan 
+        SET SupervisorSignature = ${signature}, status = 'Completed' 
+        WHERE sNo = ${verificationId}
+      `;
+      res.json({ message: "Signature saved successfully" });
+    } catch (err) { 
+      console.error(err);
+      res.status(500).json({ message: "DB error" }); 
+    }
+});
+
+// ==========================================
+//        HOF DASHBOARD APIS 
+// ==========================================
+router.get('/hof/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await sql.query`
+      SELECT recordDate as reportDate, line as disa, AssignedHOF as hofName,
+             (SELECT TOP 1 HOFSignature FROM ErrorProofVerification t2 WHERE t2.recordDate = t1.recordDate AND t2.line = t1.line AND t2.AssignedHOF = t1.AssignedHOF) as hofSignature
+      FROM ErrorProofVerification t1
+      WHERE AssignedHOF = ${name}
+      GROUP BY recordDate, line, AssignedHOF
+      ORDER BY recordDate DESC
+    `;
+    res.json(result.recordset);
+  } catch (error) { res.status(500).json({ error: "Failed to fetch HOF reports" }); }
+});
+
+router.post('/sign-hof', async (req, res) => {
+  try {
+    const { date, line, signature } = req.body;
+    await sql.query`
+      UPDATE ErrorProofVerification 
+      SET HOFSignature = ${signature} 
+      WHERE recordDate = ${date} AND line = ${line}
+    `;
+    res.json({ message: "Signature saved successfully" });
+  } catch (error) { res.status(500).json({ error: "Failed to save HOF signature" }); }
+});
+
+
+// ==========================================
+//        PDF GENERATOR LOGIC
+// ==========================================
 router.get("/report", async (req, res) => {
   try {
-    const verificationResult = await sql.query`SELECT * FROM ErrorProofVerification ORDER BY recordDate ASC, id ASC`;
-    const reactionResult = await sql.query`SELECT * FROM ReactionPlan ORDER BY id ASC`;
+    const { line } = req.query; 
+    
+    let verificationQuery = `SELECT * FROM ErrorProofVerification`;
+    let reactionQuery = `SELECT * FROM ReactionPlan`;
+    
+    if (line) {
+        verificationQuery += ` WHERE line = '${line}'`;
+    }
+    
+    // 🔥 FIXED: Ensure reactionQuery uses sNo
+    verificationQuery += ` ORDER BY recordDate ASC, id ASC`;
+    reactionQuery += ` ORDER BY sNo ASC`;
 
-    const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape", bufferPages: true });
+    const verificationResult = await sql.query(verificationQuery);
+    const reactionResult = await sql.query(reactionQuery);
+
+    const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape", bufferPages: true, autoPageBreak: false });
+    const PAGE_HEIGHT = 595.28;
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "inline; filename=Error_Proof_Check_List.pdf");
     doc.pipe(res);
@@ -77,18 +164,21 @@ router.get("/report", async (req, res) => {
     const startX = 30;
     const startY = 30;
 
+    const getISODate = (dateStr) => {
+      const d = new Date(dateStr);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
     const formatDate = (dateStr) => {
       const d = new Date(dateStr);
       return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
     };
 
-    const wLine = 45, wName = 105, wNature = 140, wFreq = 55;
+    const wLine = 45, wName = 120, wNature = 145, wFreq = 65;
     const wDateBox = 135; 
-    const wShift = wDateBox / 3; 
 
     const drawMainHeaders = (y, datesArr = []) => {
-      doc.font("Helvetica-Bold").fontSize(14).text("ERROR PROOF VERIFICATION CHECK LIST - FDY", startX, y, { align: "center" });
-      
+      doc.font("Helvetica-Bold").fontSize(14).fillColor('black').text("ERROR PROOF VERIFICATION CHECK LIST - FDY", startX, y, { align: "center" });
       const headerTopY = y + 25;
       
       doc.rect(startX, headerTopY, wLine, 60).stroke();
@@ -111,79 +201,39 @@ router.get("/report", async (req, res) => {
         const boxX = cx + (i * wDateBox);
         
         doc.rect(boxX, headerTopY, wDateBox, 20).stroke();
-        
-        // Dynamically apply the chunked dates to the headers
-        let dateLabel = "Date:";
-        if (datesArr[i]) {
-          dateLabel = `Date: ${formatDate(datesArr[i])}`;
-        }
+        let dateLabel = datesArr[i] ? `Date: ${formatDate(datesArr[i])}` : "Date:";
         
         doc.font("Helvetica-Bold").fontSize(9);
         doc.text(dateLabel, boxX + 2, headerTopY + 5, { width: wDateBox, align: "left" });
 
-        doc.rect(boxX, headerTopY + 20, wShift, 20).stroke();
-        doc.rect(boxX + wShift, headerTopY + 20, wShift, 20).stroke();
-        doc.rect(boxX + (wShift*2), headerTopY + 20, wShift, 20).stroke();
-        
-        doc.fontSize(7);
-        doc.text("Ist Shift", boxX, headerTopY + 25, { width: wShift, align: "center" });
-        doc.text("IInd Shift", boxX + wShift, headerTopY + 25, { width: wShift, align: "center" });
-        doc.text("IIIrd Shift", boxX + (wShift*2), headerTopY + 25, { width: wShift, align: "center" });
-        
-        doc.fontSize(6);
-        doc.rect(boxX, headerTopY + 40, wShift, 20).stroke();
-        doc.rect(boxX + wShift, headerTopY + 40, wShift, 20).stroke();
-        doc.rect(boxX + (wShift*2), headerTopY + 40, wShift, 20).stroke();
-        
-        doc.text("Observation\nResult", boxX, headerTopY + 42, { width: wShift, align: "center" });
-        doc.text("Observation\nResult", boxX + wShift, headerTopY + 42, { width: wShift, align: "center" });
-        doc.text("Observation\nResult", boxX + (wShift*2), headerTopY + 42, { width: wShift, align: "center" });
+        doc.rect(boxX, headerTopY + 20, wDateBox, 40).stroke();
+        doc.fontSize(8);
+        doc.text("Observation Result", boxX, headerTopY + 35, { width: wDateBox, align: "center" });
       }
 
       return headerTopY + 60;
     };
 
-    // ============================================================================
-    // DATA GROUPING LOGIC (1 Row spans 3 Dates)
-    // ============================================================================
     const allRecords = verificationResult.recordset;
+    const allUniqueDates = [...new Set(allRecords.map(r => getISODate(r.recordDate)))].sort();
+    const last3Dates = allUniqueDates.slice(-3); 
 
-    // 1. Get Unique Dates
-    const uniqueDates = [...new Set(allRecords.map(r => {
-      const d = new Date(r.recordDate);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }))].sort();
+    const filteredRecords = allRecords.filter(r => last3Dates.includes(getISODate(r.recordDate)));
 
-    // 2. Get Unique Error Proof Rows
     const uniqueProofsMap = new Map();
-    allRecords.forEach(r => {
+    filteredRecords.forEach(r => {
       if (!uniqueProofsMap.has(r.errorProofName)) {
-        uniqueProofsMap.set(r.errorProofName, {
-          line: r.line, nature: r.natureOfErrorProof, frequency: r.frequency
-        });
+        uniqueProofsMap.set(r.errorProofName, { line: r.line, nature: r.natureOfErrorProof, frequency: r.frequency });
       }
     });
     const uniqueProofs = Array.from(uniqueProofsMap.keys());
 
-    // 3. Chunk Dates into groups of 3
-    const dateChunks = [];
-    if (uniqueDates.length === 0) {
-      dateChunks.push([]); // Print empty form if DB is empty
-    } else {
-      for (let i = 0; i < uniqueDates.length; i += 3) {
-        dateChunks.push(uniqueDates.slice(i, i + 3));
-      }
-    }
+    const dateChunks = last3Dates.length > 0 ? [last3Dates] : [[]];
 
     let y = startY;
 
-    // Draw Pages based on Date Chunks (3 Days per Page)
     dateChunks.forEach((chunk, chunkIndex) => {
-      if (chunkIndex > 0) {
-        doc.addPage({ layout: "landscape", margin: 30 });
-        y = startY;
-      }
-      
+      if (chunkIndex > 0) { doc.addPage({ layout: "landscape", margin: 30 }); y = startY; }
       y = drawMainHeaders(y, chunk);
 
       uniqueProofs.forEach((proofName) => {
@@ -195,9 +245,7 @@ router.get("/report", async (req, res) => {
         const freqHeight = doc.heightOfString(proofData.frequency || "", { width: wFreq - 8, align: "center" });
         let rowHeight = Math.max(50, nameHeight + 20, natureHeight + 20, freqHeight + 20); 
 
-        if (y + rowHeight > doc.page.height - 60) {
-          doc.font("Helvetica-Bold").fontSize(9);
-          doc.text("QF/07/FYQ-05, Rev.No: 02 dt 28.02.2023", startX, y + 10, { align: "left" });
+        if (y + rowHeight > PAGE_HEIGHT - 120) {
           doc.addPage({ layout: "landscape", margin: 30 });
           y = drawMainHeaders(30, chunk); 
         }
@@ -219,57 +267,70 @@ router.get("/report", async (req, res) => {
         doc.text(proofData.frequency || "", cx + 4, y + 10, { width: wFreq - 8, align: "center" });
         cx += wFreq;
 
-        for (let i = 0; i < 9; i++) {
-          doc.rect(cx + (i * wShift), y, wShift, rowHeight).stroke();
-        }
+        for (let i = 0; i < 3; i++) { doc.rect(cx + (i * wDateBox), y, wDateBox, rowHeight).stroke(); }
 
-        // =========================================================
-        // PLOT DATA EXACTLY IN THE RIGHT SHIFT CELL
-        // =========================================================
         chunk.forEach((dateStr, dateIndex) => {
-          const recordsForDateAndProof = allRecords.filter(r => {
-            const d = new Date(r.recordDate);
-            const rDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-            return rDateStr === dateStr && r.errorProofName === proofName;
-          });
+          const recordsForDateAndProof = filteredRecords.filter(r => getISODate(r.recordDate) === dateStr && r.errorProofName === proofName);
 
-          recordsForDateAndProof.forEach(record => {
-            let shiftOffset = 0;
-            if (record.shift === "II") shiftOffset = 1;
-            if (record.shift === "III") shiftOffset = 2;
-
-            const cellIndex = (dateIndex * 3) + shiftOffset;
-            const targetX = cx + (cellIndex * wShift);
+          if (recordsForDateAndProof.length > 0) {
+            const record = recordsForDateAndProof[0];
+            const targetX = cx + (dateIndex * wDateBox);
             const targetY = y + (rowHeight / 2) - 8;
 
-            doc.fontSize(7);
+            doc.fontSize(8);
             if (record.observationResult === "OK") {
-              doc.text("Checked\nOK", targetX, targetY, { width: wShift, align: "center" });
+              doc.text("Checked OK", targetX, targetY, { width: wDateBox, align: "center" });
             } else if (record.observationResult === "NOT_OK") {
-              doc.text("Checked\nNot OK", targetX, targetY, { width: wShift, align: "center" });
+              doc.text("Checked Not OK", targetX, targetY, { width: wDateBox, align: "center" });
             }
-          });
+          }
         });
 
         y += rowHeight;
       });
 
-      // Part A Page Footer
-      doc.font("Helvetica-Bold").fontSize(9);
-      doc.text("QF/07/FYQ-05, Rev.No: 02 dt 28.02.2023", startX, y + 10, { align: "left" });
+      // Signature Grid
+      const sigY = y + 20; 
+      if (sigY + 80 > PAGE_HEIGHT - 40) { doc.addPage({ layout: "landscape", margin: 30 }); y = 30; }
+
+      doc.font("Helvetica-Bold").fontSize(10).fillColor('black');
+      doc.text("Verified By Moulding Incharge", startX, sigY);
+      doc.rect(startX, sigY + 8, 180, 45).stroke(); 
+
+      doc.text("Reviewed By HOF", startX + 350, sigY);
+      doc.rect(startX + 350, sigY + 8, 180, 45).stroke(); 
+
+      const latestRecordWithOpSig = filteredRecords.find(r => r.OperatorSignature);
+      const latestRecordWithHofSig = filteredRecords.find(r => r.HOFSignature);
+
+      if (latestRecordWithOpSig && latestRecordWithOpSig.OperatorSignature.includes('base64,')) {
+          try { 
+              const imgBuffer = Buffer.from(latestRecordWithOpSig.OperatorSignature.split('base64,')[1], 'base64'); 
+              doc.image(imgBuffer, startX + 5, sigY + 12, { fit: [170, 37] }); 
+          } catch(e) {}
+      }
+      
+      if (latestRecordWithHofSig && latestRecordWithHofSig.HOFSignature.includes('base64,')) {
+          try { 
+              const imgBuffer = Buffer.from(latestRecordWithHofSig.HOFSignature.split('base64,')[1], 'base64'); 
+              doc.image(imgBuffer, startX + 355, sigY + 12, { fit: [170, 37] }); 
+          } catch(e) {}
+      }
     });
 
-    // ============================================================================
+    // =========================================================
     // PART B: REACTION PLAN TABLE
-    // ============================================================================
-    if (reactionResult.recordset.length > 0) {
+    // =========================================================
+    const filteredReactions = reactionResult.recordset.filter(r => last3Dates.includes(getISODate(r.recordDate)));
+
+    if (filteredReactions.length > 0) {
       doc.addPage({ layout: "landscape", margin: 30 });
       
       const rColWidths = [30, 50, 90, 60, 80, 80, 80, 50, 70, 70, 90];
-      const rHeaders = ["S.No", "Error\nProof No", "Error proof\nName", "Date /\nShift", "Problem", "Root Cause", "Corrective\naction", "Status", "Reviewed\nBy", "Approved\nBy", "Remarks"];
+      const rHeaders = ["S.No", "Error\nProof No", "Error proof\nName", "Date", "Problem", "Root Cause", "Corrective\naction", "Status", "Reviewed\nBy (Op)", "Approved By\n(Sup)", "Remarks"];
 
       const drawReactionHeaders = (ry) => {
-        doc.font("Helvetica-Bold").fontSize(14).text("REACTION PLAN", startX, ry, { align: "center" });
+        doc.font("Helvetica-Bold").fontSize(14).fillColor('black').text("REACTION PLAN", startX, ry, { align: "center" });
         const headerY = ry + 25;
         doc.fontSize(8);
         
@@ -284,57 +345,65 @@ router.get("/report", async (req, res) => {
 
       let ry = drawReactionHeaders(30);
 
-      reactionResult.recordset.forEach((rRow) => {
-        doc.font("Helvetica").fontSize(8);
+      filteredReactions.forEach((rRow, index) => {
+        doc.font("Helvetica").fontSize(8).fillColor('black');
 
         const dDate = new Date(rRow.recordDate);
         const dateStr = !isNaN(dDate) ? `${String(dDate.getDate()).padStart(2, '0')}/${String(dDate.getMonth() + 1).padStart(2, '0')}/${dDate.getFullYear()}` : "";
-        const dateShiftStr = `${dateStr}\nShift ${rRow.shift || ""}`;
 
         const hName = doc.heightOfString(rRow.errorProofName || "", { width: rColWidths[2] - 8, align: "center" });
         const hProb = doc.heightOfString(rRow.problem || "", { width: rColWidths[4] - 8, align: "center" });
-        const hRoot = doc.heightOfString(rRow.rootCause || "", { width: rColWidths[5] - 8, align: "center" });
-        const hCorr = doc.heightOfString(rRow.correctiveAction || "", { width: rColWidths[6] - 8, align: "center" });
-        const hRemk = doc.heightOfString(rRow.remarks || "", { width: rColWidths[10] - 8, align: "center" });
         
-        let rRowHeight = Math.max(40, hName + 15, hProb + 15, hRoot + 15, hCorr + 15, hRemk + 15);
+        let rRowHeight = Math.max(40, hName + 15, hProb + 15);
 
-        if (ry + rRowHeight > doc.page.height - 60) {
-          doc.font("Helvetica-Bold").fontSize(9);
-          doc.text("QF/07/FYQ-05, Rev.No: 02 dt 28.02.2023", startX, ry + 10, { align: "left" });
-
+        if (ry + rRowHeight > PAGE_HEIGHT - 60) {
           doc.addPage({ layout: "landscape", margin: 30 });
           ry = drawReactionHeaders(30);
         }
 
         const rowData = [
-          rRow.sNo || "", 
-          rRow.errorProofNo || "", 
-          rRow.errorProofName || "", 
-          dateShiftStr, 
-          rRow.problem || "", 
-          rRow.rootCause || "", 
-          rRow.correctiveAction || "", 
-          rRow.status || "", 
-          rRow.reviewedBy || "", 
-          rRow.approvedBy || "", 
-          rRow.remarks || ""
+          (index + 1).toString(), rRow.errorProofNo || "", rRow.errorProofName || "", dateStr, rRow.problem || "", rRow.rootCause || "", 
+          rRow.correctiveAction || "", rRow.status || "", rRow.reviewedBy || "", rRow.SupervisorSignature || rRow.approvedBy || "", rRow.remarks || ""
         ];
 
         let currX = startX;
         rowData.forEach((cellText, i) => {
           doc.rect(currX, ry, rColWidths[i], rRowHeight).stroke();
           
-          const textY = (i === 4 || i === 5 || i === 6 || i === 10 || i === 2) ? ry + 5 : ry + (rRowHeight / 2) - 5;
-          doc.text(String(cellText), currX + 4, textY, { width: rColWidths[i] - 8, align: "center" });
+          if (i === 9 && cellText && String(cellText).startsWith('data:image')) {
+             try {
+                const imgBuffer = Buffer.from(cellText.split('base64,')[1], 'base64');
+                doc.image(imgBuffer, currX + 2, ry + 2, { fit: [rColWidths[i] - 4, rRowHeight - 4] });
+             } catch(e) {}
+          } else {
+             const textY = (i === 4 || i === 5 || i === 6 || i === 10 || i === 2) ? ry + 5 : ry + (rRowHeight / 2) - 5;
+             
+             if (i === 7) {
+                if (String(cellText).toLowerCase() === 'completed') { doc.fillColor('green').font("Helvetica-Bold"); }
+                else if (String(cellText).toLowerCase() === 'pending') { doc.fillColor('red').font("Helvetica-Bold"); }
+                else { doc.fillColor('black').font("Helvetica"); }
+             } else {
+                doc.fillColor('black').font("Helvetica");
+             }
+             
+             doc.text(String(cellText), currX + 4, textY, { width: rColWidths[i] - 8, align: "center" });
+             doc.fillColor('black').font("Helvetica");
+          }
           currX += rColWidths[i];
         });
 
         ry += rRowHeight;
       });
+    }
 
-      doc.font("Helvetica-Bold").fontSize(9);
-      doc.text("QF/07/FYQ-05, Rev.No: 02 dt 28.02.2023", startX, ry + 10, { align: "left" });
+    // =========================================================
+    // 🔥 GLOBAL FOOTER LOOP (Locks to bottom of every page)
+    // =========================================================
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < (range.start + range.count); i++) {
+        doc.switchToPage(i);
+        doc.font("Helvetica-Bold").fontSize(9).fillColor('black');
+        doc.text("QF/07/FYQ-05, Rev.No: 02 dt 28.02.2023", 30, PAGE_HEIGHT - 45, { align: "left", lineBreak: false });
     }
 
     doc.end();

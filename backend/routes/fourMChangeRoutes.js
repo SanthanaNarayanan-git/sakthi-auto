@@ -2,24 +2,17 @@ const express = require("express");
 const router = express.Router();
 const sql = require("mssql");
 const PDFDocument = require("pdfkit");
-const path = require("path");
 
 /**
- * GET supervisors (replacing incharges) for the searchable dropdown
+ * GET supervisors AND hods for the dropdowns
  */
 router.get("/incharges", async (req, res) => {
   try {
-    // Fetch from the Users table where role is 'supervisor'
-    // Aliasing 'username' to 'name' so the frontend dropdown doesn't break
-    const result = await sql.query`
-      SELECT username AS name 
-      FROM dbo.Users 
-      WHERE role = 'supervisor'
-      ORDER BY username ASC
-    `;
-    res.json(result.recordset);
+    const supRes = await sql.query`SELECT username AS name FROM dbo.Users WHERE role = 'supervisor' ORDER BY username ASC`;
+    const hodRes = await sql.query`SELECT username AS name FROM dbo.Users WHERE role = 'hod' ORDER BY username ASC`;
+    res.json({ supervisors: supRes.recordset, hods: hodRes.recordset });
   } catch (err) {
-    console.error("Error fetching supervisors:", err);
+    console.error("Error fetching users:", err);
     res.status(500).json({ message: "DB error" });
   }
 });
@@ -41,7 +34,7 @@ router.post("/add", async (req, res) => {
   const {
     line, partName, recordDate, shift, mcNo, type4M, description,
     firstPart, lastPart, inspFreq, retroChecking, quarantine,
-    partId, internalComm, inchargeSign
+    partId, internalComm, inchargeSign, assignedHOD
   } = req.body;
 
   try {
@@ -49,11 +42,11 @@ router.post("/add", async (req, res) => {
       INSERT INTO FourMChangeRecord (
         line, partName, recordDate, shift, mcNo, type4M, description,
         firstPart, lastPart, inspFreq, retroChecking, quarantine,
-        partId, internalComm, inchargeSign
+        partId, internalComm, inchargeSign, AssignedHOD
       ) VALUES (
         ${line}, ${partName}, ${recordDate}, ${shift}, ${mcNo}, ${type4M}, ${description},
         ${firstPart}, ${lastPart}, ${inspFreq}, ${retroChecking}, ${quarantine},
-        ${partId}, ${internalComm}, ${inchargeSign}
+        ${partId}, ${internalComm}, ${inchargeSign}, ${assignedHOD}
       )
     `;
     res.json({ message: "Record saved successfully" });
@@ -63,94 +56,139 @@ router.post("/add", async (req, res) => {
   }
 });
 
-/**
- * GET PDF REPORT
- */
+// ==========================================
+//        SUPERVISOR API
+// ==========================================
+router.get("/supervisor/:name", async (req, res) => {
+    try {
+      const { name } = req.params;
+      const result = await sql.query`
+        SELECT id, recordDate, shift, line as disa, partName, mcNo, type4M, description, SupervisorSignature
+        FROM FourMChangeRecord WHERE inchargeSign = ${name} ORDER BY recordDate DESC, shift ASC
+      `;
+      res.json(result.recordset);
+    } catch (err) { res.status(500).json({ message: "DB error" }); }
+});
+  
+router.post("/sign-supervisor", async (req, res) => {
+    try {
+      const { reportId, signature } = req.body;
+      await sql.query`UPDATE FourMChangeRecord SET SupervisorSignature = ${signature} WHERE id = ${reportId}`;
+      res.json({ message: "Signature saved successfully" });
+    } catch (err) { res.status(500).json({ message: "DB error" }); }
+});
+
+// ==========================================
+//        HOD DASHBOARD APIS 
+// ==========================================
+router.get("/hod/:name", async (req, res) => {
+    try {
+      const { name } = req.params;
+      const result = await sql.query`
+        SELECT id, recordDate, shift, line as disa, partName, mcNo, type4M, description, HODSignature
+        FROM FourMChangeRecord WHERE AssignedHOD = ${name} ORDER BY recordDate DESC, shift ASC
+      `;
+      res.json(result.recordset);
+    } catch (err) { res.status(500).json({ message: "DB error" }); }
+});
+  
+router.post("/sign-hod", async (req, res) => {
+    try {
+      const { reportId, signature } = req.body;
+      await sql.query`UPDATE FourMChangeRecord SET HODSignature = ${signature} WHERE id = ${reportId}`;
+      res.json({ message: "HOD Signature saved successfully" });
+    } catch (err) { res.status(500).json({ message: "DB error" }); }
+});
+
+// ==========================================
+//        PDF GENERATOR
+// ==========================================
 router.get("/report", async (req, res) => {
   try {
-    const result = await sql.query`
-      SELECT * FROM FourMChangeRecord
-      ORDER BY id DESC
-    `;
+    const { reportId } = req.query;
 
-    const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape" });
+    let query = `SELECT * FROM FourMChangeRecord`;
+    if (reportId) query += ` WHERE id = ${reportId}`;
+    else query += ` ORDER BY id DESC`;
+
+    const result = await sql.query(query);
+
+    // 🔥 Explicitly disable autoPageBreak to take full manual control
+    const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape", autoPageBreak: false });
+    const PAGE_HEIGHT = 595.28; 
+    const PAGE_WIDTH = 841.89;
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", "inline; filename=4M_Change_Report.pdf");
     doc.pipe(res);
 
-    // Get Line from the most recent record
     const topRecord = result.recordset.length > 0 ? result.recordset[0] : {};
     const headerLine = topRecord.line || "DISA - I";
+    const hodSignature = topRecord.HODSignature;
     
-    // Get all unique part names from the database and join them with commas
-    const uniquePartNames = [...new Set(
-      result.recordset
-        .map(row => row.partName)
-        .filter(name => name && name.trim() !== "") // Remove empty names
-    )];
+    const uniquePartNames = [...new Set(result.recordset.map(row => row.partName).filter(name => name && name.trim() !== ""))];
     const headerPart = uniquePartNames.join(", ");
 
     const startX = 30;
     const startY = 30;
-    
-    // Column widths mapped directly to the 12 fields (Total: 780 to fit landscape)
     const colWidths = [60, 45, 45, 185, 40, 40, 40, 45, 60, 50, 60, 110];
     const rowHeight = 40;
 
     const headers = [
       "Date /\nShift", "M/c.\nNo", "Type of\n4M", "Description", 
       "First\nPart", "Last\nPart", "Insp.\nFreq", "Retro\nChecking", 
-      "Quarantine", "Part\nIdent.", "Internal\nComm.", "Supervisor\nSign" // Changed Header text slightly
+      "Quarantine", "Part\nIdent.", "Internal\nComm.", "Supervisor\nSign"
     ];
 
-    // Helper: Draw Vector Tick, Cross, or standard Text
-    const drawCellContent = (value, x, y, width) => {
-      const centerX = x + width / 2;
-      const centerY = y + 20; // Center vertically in the 40px row
-
-      if (value === "OK") {
-        // Draw a perfect vector Tick Mark (✓)
-        doc.save();
-        doc.lineWidth(1.5);
-        doc.moveTo(centerX - 4, centerY + 2)
-           .lineTo(centerX - 1, centerY + 6)
-           .lineTo(centerX + 6, centerY - 4)
-           .stroke();
-        doc.restore();
-      } else if (value === "Not OK") {
-        // Draw a perfect vector Cross Mark (X)
-        doc.save();
-        doc.lineWidth(1.5);
-        doc.moveTo(centerX - 4, centerY - 4)
-           .lineTo(centerX + 4, centerY + 4)
-           .moveTo(centerX + 4, centerY - 4)
-           .lineTo(centerX - 4, centerY + 4)
-           .stroke();
-        doc.restore();
-      } else if (value === "N" || value === "I" || value === "-") {
-        // Standard text mapping
-        doc.font("Helvetica").fontSize(10).text(value, x, y + 14, { width, align: "center" });
+    // 🔥 FIX: Calculated precisely to never hit the bottom 30px margin
+    const drawFooter = () => {
+      const footerY = PAGE_HEIGHT - 45; // Moved up away from margin boundary
+      
+      doc.font("Helvetica-Bold").fontSize(9);
+      // lineBreak: false ensures the text never wraps or tries to push downward
+      doc.text("QF/07/MPD-36, Rev. No: 01, 13.03.2019", startX, footerY, { align: "left", lineBreak: false });
+      
+      const rightX = PAGE_WIDTH - 200;
+      doc.text("HOD Sign:", rightX, footerY, { align: "left", lineBreak: false });
+      
+      if (hodSignature && hodSignature.startsWith('data:image')) {
+          try {
+              const base64Data = hodSignature.split('base64,')[1];
+              const imgBuffer = Buffer.from(base64Data, 'base64');
+              // Drawn directly over the text baseline so it stays strictly inside the safe zone
+              doc.image(imgBuffer, rightX + 50, footerY - 20, { fit: [80, 30] });
+          } catch(e) { console.error("HOD Sig error", e); }
       } else {
-        // Regular string output (like Descriptions)
-        doc.font("Helvetica").fontSize(9).text(String(value || ""), x + 2, y + 5, { width: width - 4, align: "center" });
+          doc.moveTo(rightX + 50, footerY + 10).lineTo(rightX + 130, footerY + 10).stroke();
       }
-      doc.font("Helvetica").fontSize(10); // reset font
     };
 
-    // Helper: Draw Headers & Titles
+    const drawCellContent = (value, x, y, width, isSignature = false) => {
+      const centerX = x + width / 2;
+      const centerY = y + 20;
+
+      if (isSignature && value && value.startsWith('data:image')) {
+          try {
+              const base64Data = value.split('base64,')[1];
+              const imgBuffer = Buffer.from(base64Data, 'base64');
+              doc.image(imgBuffer, x + 5, y + 2, { fit: [width - 10, rowHeight - 4] });
+          } catch(e) { }
+      } else if (value === "OK") {
+        doc.save(); doc.lineWidth(1.5); doc.moveTo(centerX - 4, centerY + 2).lineTo(centerX - 1, centerY + 6).lineTo(centerX + 6, centerY - 4).stroke(); doc.restore();
+      } else if (value === "Not OK") {
+        doc.save(); doc.lineWidth(1.5); doc.moveTo(centerX - 4, centerY - 4).lineTo(centerX + 4, centerY + 4).moveTo(centerX + 4, centerY - 4).lineTo(centerX - 4, centerY + 4).stroke(); doc.restore();
+      } else if (value === "N" || value === "I" || value === "-") {
+        doc.font("Helvetica").fontSize(10).text(value, x, y + 14, { width, align: "center", lineBreak: false });
+      } else {
+        doc.font("Helvetica").fontSize(9).text(String(value || ""), x + 2, y + 5, { width: width - 4, height: rowHeight - 10, align: "center", ellipsis: true });
+      }
+      doc.font("Helvetica").fontSize(10);
+    };
+
     const drawHeaders = (y) => {
-      // Top Title
       doc.font("Helvetica-Bold").fontSize(16).text("4M CHANGE MONITORING CHECK SHEET", startX, y, { align: "center" });
-      
-      // Top Left Line details
       doc.font("Helvetica-Bold").fontSize(12).text(`Line: ${headerLine}`, startX, y + 25);
-      
-      // Top Right Part Details (Now supports comma-separated multiple parts)
-      doc.font("Helvetica-Bold").fontSize(12).text(`Part Name: ${headerPart}`, startX, y + 25, { 
-        align: "right",
-        width: doc.page.width - 60 // Prevents long lists from going off the page
-      });
+      doc.font("Helvetica-Bold").fontSize(12).text(`Part Name: ${headerPart}`, startX, y + 25, { align: "right", width: PAGE_WIDTH - 60 });
 
       const tableHeaderY = y + 50;
       let currentX = startX;
@@ -165,51 +203,33 @@ router.get("/report", async (req, res) => {
       return tableHeaderY + rowHeight;
     };
 
-    // Draw initial header
     let y = drawHeaders(startY);
 
-    // --- DRAW DATA ROWS ---
     result.recordset.forEach((row) => {
-      if (y + rowHeight > doc.page.height - 50) {
-        doc.addPage({ layout: "landscape", margin: 30 });
+      // 🔥 FIX: We now stop creating rows well before we hit the footer zone (PAGE_HEIGHT - 80)
+      if (y + rowHeight > PAGE_HEIGHT - 80) { 
+        drawFooter(); // Securely stamp the footer on the current page
+        doc.addPage({ layout: "landscape", margin: 30, autoPageBreak: false });
         y = drawHeaders(30); 
       }
 
-      const formattedDate = new Date(row.recordDate).toLocaleDateString("en-GB");
+      const d = new Date(row.recordDate);
+      const formattedDate = !isNaN(d) ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}` : "";
       const dateShiftString = `${formattedDate}\nShift ${row.shift}`;
 
-      const rowData = [
-        dateShiftString, row.mcNo, row.type4M, row.description,
-        row.firstPart, row.lastPart, row.inspFreq, row.retroChecking,
-        row.quarantine, row.partId, row.internalComm, row.inchargeSign // the DB column is still called inchargeSign
-      ];
+      const rowData = [ dateShiftString, row.mcNo, row.type4M, row.description, row.firstPart, row.lastPart, row.inspFreq, row.retroChecking, row.quarantine, row.partId, row.internalComm, row.SupervisorSignature ];
 
       let x = startX;
       rowData.forEach((cell, i) => {
         doc.rect(x, y, colWidths[i], rowHeight).stroke();
-        // Use our custom vector drawing function
-        drawCellContent(cell, x, y, colWidths[i]);
+        drawCellContent(cell, x, y, colWidths[i], (i === 11));
         x += colWidths[i];
       });
-
       y += rowHeight;
     });
 
-    // --- DRAW FOOTERS ---
-    const drawFooter = () => {
-      const footerY = doc.page.height - 30;
-      doc.font("Helvetica").fontSize(8);
-      
-      // Left Footer
-      doc.text("QF/07/MPD-36, Rev. No: 01, 13.03.2019", startX, footerY, { align: "left" });
-      
-      // Right Footer (HOD Sign)
-      const rightX = doc.page.width - 130;
-      doc.text("HOD Sign", rightX, footerY, { align: "right" });
-      doc.moveTo(rightX + 20, footerY - 5).lineTo(rightX + 100, footerY - 5).stroke(); // Underline for sign
-    };
-
-    drawFooter(); // Add to the last page
+    // Ensure the footer is drawn on the very last page
+    drawFooter();
 
     doc.end();
   } catch (err) {

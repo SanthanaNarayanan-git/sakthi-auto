@@ -1,4 +1,4 @@
-const  sql  = require('../db');
+const sql = require('../db');
 
 const mouldController = {
   // --- 1. Get Details for ALL Shifts at once ---
@@ -62,7 +62,9 @@ const mouldController = {
                 BrakeDown = ${getVal(data.brakeDown)}, Wom = ${getVal(data.wom)}, DevTrail = ${getVal(data.devTrail)},
                 PowerCut = ${getVal(data.powerCut)}, PlannedOff = ${getVal(data.plannedOff)}, 
                 VatCleaning = ${getVal(data.vatCleaning)}, Others = ${getVal(data.others)},
-                RowTotal = ${getVal(data.rowTotal)}, LastUpdated = GETDATE()
+                RowTotal = ${getVal(data.rowTotal)},
+                OperatorSignature = ${data.operatorSignature || null},
+                LastUpdated = GETDATE()
               WHERE RecordDate = ${date} AND DisaMachine = ${disa} AND Shift = ${shift}
             `;
           } else {
@@ -72,14 +74,15 @@ const mouldController = {
                 PatternChange, HeatCodeChange, MouldBroken, AmcCleaning, MouldCrush, CoreFalling,
                 SandDelay, DrySand, NozzleChange, NozzleLeakage, SpoutPocking, StRod,
                 QcVent, OutMould, LowMg, GradeChange, MsiProblem, BrakeDown, Wom, DevTrail,
-                PowerCut, PlannedOff, VatCleaning, Others, RowTotal
+                PowerCut, PlannedOff, VatCleaning, Others, RowTotal, OperatorSignature
               ) VALUES (
                 ${date}, ${disa}, ${shift}, 
                 ${getVal(data.patternChange)}, ${getVal(data.heatCodeChange)}, ${getVal(data.mouldBroken)}, ${getVal(data.amcCleaning)}, ${getVal(data.mouldCrush)}, ${getVal(data.coreFalling)},
                 ${getVal(data.sandDelay)}, ${getVal(data.drySand)}, ${getVal(data.nozzleChange)}, ${getVal(data.nozzleLeakage)}, ${getVal(data.spoutPocking)}, ${getVal(data.stRod)},
                 ${getVal(data.qcVent)}, ${getVal(data.outMould)}, ${getVal(data.lowMg)}, ${getVal(data.gradeChange)}, ${getVal(data.msiProblem)},
                 ${getVal(data.brakeDown)}, ${getVal(data.wom)}, ${getVal(data.devTrail)},
-                ${getVal(data.powerCut)}, ${getVal(data.plannedOff)}, ${getVal(data.vatCleaning)}, ${getVal(data.others)}, ${getVal(data.rowTotal)}
+                ${getVal(data.powerCut)}, ${getVal(data.plannedOff)}, ${getVal(data.vatCleaning)}, ${getVal(data.others)}, ${getVal(data.rowTotal)},
+                ${data.operatorSignature || null}
               )
             `;
           }

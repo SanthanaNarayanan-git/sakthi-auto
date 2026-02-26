@@ -8,6 +8,7 @@ import UnPouredMouldDetails from "./UnPouredMouldDetails";
 import DmmSettingParameters from "./DmmSettingParameters";
 import BottomLevelAudit from "./BottomLevelAudit";
 import ErrorProofVerification2 from "./ErrorProofVerification2";
+import DailyProductionPerformance from "./DailyProductionPerformance";
 
 /**
  * Central map for operator forms
@@ -23,6 +24,7 @@ const formMap = {
    "dmm-setting-parameters-checklist": <DmmSettingParameters />,
    "lpa":<BottomLevelAudit />,
    "error-proof-2": <ErrorProofVerification2 />,
+   "product": <DailyProductionPerformance />,
   // Future forms (example)
   // "product": <ProductForm />,
   // "performance": <PerformanceForm />,
